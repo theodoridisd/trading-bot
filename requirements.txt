@@ -1,3 +1,4 @@
 anthropic
 python-binance
 requests
+numpy
