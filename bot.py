@@ -16,7 +16,7 @@ BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 TRADE_SYMBOLS = ["ETHEUR", "BTCEUR", "XRPEUR", "TRXEUR"]
 MAX_TRADE_PERCENT = 0.30
 STOP_LOSS_PERCENT = 0.05
-MIN_TRADE_EUR = 10
+MIN_TRADE_EUR = 1
 CONFIDENCE_THRESHOLD = 7
 INTERVAL_SECONDS = 3600
 
@@ -243,8 +243,12 @@ def execute_trades(client, decisions, portfolio, portfolio_value, entry_prices, 
             continue
 
         if eur_available < amount_eur:
-            print(f"⚠️ BUY {symbol}: ανεπαρκές EUR (€{eur_available:.2f} < €{amount_eur:.2f}) — παράλειψη")
-            continue
+            if eur_available >= MIN_TRADE_EUR:
+                print(f"⚠️ BUY {symbol}: ανεπαρκές EUR — αγορά με διαθέσιμο ποσό €{eur_available:.2f}")
+                amount_eur = eur_available
+            else:
+                print(f"⚠️ BUY {symbol}: ανεπαρκές EUR (€{eur_available:.2f}) — παράλειψη")
+                continue
 
         try:
             client.order_market_buy(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
