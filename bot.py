@@ -110,7 +110,7 @@ def check_stop_loss(client, portfolio, prices, entry_prices):
                     print(f"❌ Σφάλμα stop-loss για {coin}: {e}")
 
 def ask_claude(portfolio, prices, portfolio_value, news):
-    """Ρωτάει τον Claude με ιστορικό trades και news"""
+    """Ρωτάει τον Claude με ιστορικό trades και news — επιστρέφει λίστα αποφάσεων"""
     ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     portfolio_summary = {}
@@ -136,13 +136,13 @@ def ask_claude(portfolio, prices, portfolio_value, news):
     recent_history = trade_history[-5:] if trade_history else []
     news_text = "\n".join([f"- {n}" for n in news]) if news else "Δεν υπάρχουν διαθέσιμα νέα"
 
-    prompt = f"""Είσαι ένας έμπειρος crypto trader. Ανάλυσε όλες τις πληροφορίες και δώσε μία συγκεκριμένη εντολή.
+    prompt = f"""Είσαι ένας έμπειρος crypto trader. Ανάλυσε όλες τις πληροφορίες και δώσε μία λίστα εντολών.
 
 PORTFOLIO (Συνολική αξία: €{portfolio_value:.2f} EUR):
 {json.dumps(portfolio_summary, indent=2)}
 
 ΔΕΔΟΜΕΝΑ ΑΓΟΡΑΣ (τελευταίες 24 ώρες):
-{json.dumps({s: {k: v for k, v in d.items() if k != 'prices_24h'} for s, d in prices.items()}, indent=2)}
+{json.dumps({s: {{k: v for k, v in d.items() if k != 'prices_24h'}} for s, d in prices.items()}, indent=2)}
 
 ΤΕΛΕΥΤΑΙΑ CRYPTO NEWS:
 {news_text}
@@ -153,24 +153,29 @@ PORTFOLIO (Συνολική αξία: €{portfolio_value:.2f} EUR):
 ΚΑΝΟΝΕΣ:
 - Μέγιστο 30% του portfolio ανά trade
 - Ελάχιστο trade: €10 EUR
+- Μπορείς να δώσεις έως 3 εντολές (π.χ. πούλα XRP και αγόρασε BTC)
+- Οι SELL εκτελούνται πρώτα ώστε να υπάρχει EUR για BUY
 - Λάβε υπόψη το ιστορικό για να αποφύγεις overtrading
 - Λάβε υπόψη τα news για sentiment ανάλυση
 
-Απάντησε ΜΟΝΟ με JSON χωρίς καμία άλλη εξήγηση:
-{{"action": "BUY" ή "SELL" ή "HOLD", "symbol": "ETHEUR" ή "BTCEUR" ή "XRPEUR" ή "TRXEUR" ή null, "amount_eur": ποσό σε EUR ή null, "reason": "σύντομη εξήγηση", "confidence": 1-10}}"""
+Απάντησε ΜΟΝΟ με JSON array χωρίς καμία άλλη εξήγηση:
+[
+  {{"action": "BUY" ή "SELL" ή "HOLD", "symbol": "ETHEUR" ή "BTCEUR" ή "XRPEUR" ή "TRXEUR" ή null, "amount_eur": ποσό σε EUR ή null, "reason": "σύντομη εξήγηση", "confidence": 1-10}},
+  ...
+]"""
 
     message = ai_client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=300,
+        max_tokens=500,
         messages=[{"role": "user", "content": prompt}]
     )
 
     response_text = message.content[0].text
-    match = re.search(r'\{.*\}', response_text, re.DOTALL)
+    match = re.search(r'\[.*\]', response_text, re.DOTALL)
     if match:
         return json.loads(match.group())
     else:
-        raise ValueError("No JSON found in response")
+        raise ValueError("No JSON array found in response")
 
 def execute_trade(client, decision, portfolio, portfolio_value):
     action = decision.get("action")
@@ -257,17 +262,27 @@ def main():
 
             check_stop_loss(binance_client, portfolio, prices, entry_prices)
 
-            decision = ask_claude(portfolio, prices, portfolio_value, news)
-            print(f"🧠 Απόφαση: {decision['action']} | {decision.get('symbol', '-')} | Confidence: {decision['confidence']}/10")
-            print(f"📝 Λόγος: {decision['reason']}")
+            decisions = ask_claude(portfolio, prices, portfolio_value, news)
+            print(f"🧠 Ο Claude πρότεινε {len(decisions)} εντολές:")
 
-            if decision['confidence'] >= CONFIDENCE_THRESHOLD:
-                order = execute_trade(binance_client, decision, portfolio, portfolio_value)
-                if order and decision['action'] == 'BUY':
-                    coin = decision['symbol'].replace("EUR", "")
-                    entry_prices[coin] = prices[decision['symbol']]["current"]
-            else:
-                print(f"⚠️ Confidence {decision['confidence']}/10 < {CONFIDENCE_THRESHOLD} - Παράλειψη")
+            # Εκτελούμε πρώτα τα SELL και μετά τα BUY
+            sells = [d for d in decisions if d.get("action") == "SELL"]
+            buys = [d for d in decisions if d.get("action") == "BUY"]
+            holds = [d for d in decisions if d.get("action") == "HOLD"]
+
+            for decision in sells + buys + holds:
+                print(f"   → {decision['action']} | {decision.get('symbol', '-')} | Confidence: {decision['confidence']}/10")
+                print(f"     Λόγος: {decision['reason']}")
+
+                if decision['confidence'] >= CONFIDENCE_THRESHOLD:
+                    # Ανανεώνουμε το portfolio μετά από κάθε trade
+                    portfolio = get_portfolio(binance_client)
+                    order = execute_trade(binance_client, decision, portfolio, portfolio_value)
+                    if order and decision['action'] == 'BUY':
+                        coin = decision['symbol'].replace("EUR", "")
+                        entry_prices[coin] = prices[decision['symbol']]["current"]
+                else:
+                    print(f"     ⚠️ Confidence {decision['confidence']}/10 < {CONFIDENCE_THRESHOLD} - Παράλειψη")
 
         except Exception as e:
             print(f"❌ Σφάλμα: {e}")
