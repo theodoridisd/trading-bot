@@ -99,6 +99,7 @@ def check_stop_loss(client, portfolio, prices, entry_prices):
 
 def ask_claude(portfolio, prices, portfolio_value):
     """Ρωτάει τον Claude για απόφαση trading"""
+    import re
     ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     
     portfolio_summary = {}
@@ -134,7 +135,7 @@ PORTFOLIO (Συνολική αξία: ${portfolio_value:.2f} USDT):
 - Ελάχιστο trade: $10 USDT
 - Αν δεν υπάρχει USDT για αγορά, μπορείς να προτείνεις πώληση ενός coin για αγορά άλλου
 
-Απάντησε ΜΟΝΟ με JSON:
+Απάντησε ΜΟΝΟ με JSON χωρίς καμία άλλη εξήγηση:
 {{"action": "BUY" ή "SELL" ή "HOLD", "symbol": "BETHUSDT" ή "BTCUSDT" ή "XRPUSDT" ή "TRXUSDT" ή null, "amount_usdt": ποσό σε USDT ή null, "reason": "σύντομη εξήγηση", "confidence": 1-10}}"""
 
     message = ai_client.messages.create(
@@ -144,12 +145,11 @@ PORTFOLIO (Συνολική αξία: ${portfolio_value:.2f} USDT):
     )
     
     response_text = message.content[0].text
-    import re
-        match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        else:
-            raise ValueError("No JSON found in response")
+    match = re.search(r'\{.*\}', response_text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    else:
+        raise ValueError("No JSON found in response")
 
 def execute_trade(client, decision, portfolio, portfolio_value):
     """Εκτελεί το trade με όλους τους ελέγχους ασφαλείας"""
