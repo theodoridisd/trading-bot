@@ -13,7 +13,7 @@ BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 
 # Ρυθμίσεις
-TRADE_SYMBOLS = ["BETHUSDT", "BTCUSDT", "XRPUSDT", "TRXUSDT"]
+TRADE_SYMBOLS = ["WBETHUSDT", "BTCUSDT", "XRPUSDT", "TRXUSDT"]
 MAX_TRADE_PERCENT = 0.30
 STOP_LOSS_PERCENT = 0.05
 MIN_TRADE_USDT = 10
@@ -26,7 +26,7 @@ trade_history = []
 def get_portfolio(client):
     account = client.get_account()
     portfolio = {}
-    relevant_coins = ["BETH", "BTC", "XRP", "TRX", "USDT"]
+    relevant_coins = ["WBETH", "BTC", "XRP", "TRX", "USDT"]
     for balance in account['balances']:
         asset = balance['asset']
         free = float(balance['free'])
@@ -70,7 +70,7 @@ def get_crypto_news():
 def calculate_portfolio_value(portfolio, prices):
     total = portfolio.get("USDT", 0)
     symbol_map = {
-        "BETH": "BETHUSDT",
+        "WBETH": "WBETHUSDT",
         "BTC": "BTCUSDT",
         "XRP": "XRPUSDT",
         "TRX": "TRXUSDT"
@@ -84,7 +84,7 @@ def calculate_portfolio_value(portfolio, prices):
 
 def check_stop_loss(client, portfolio, prices, entry_prices):
     symbol_map = {
-        "BETH": "BETHUSDT",
+        "WBETH": "WBETHUSDT",
         "BTC": "BTCUSDT",
         "XRP": "XRPUSDT",
         "TRX": "TRXUSDT"
@@ -117,7 +117,7 @@ def ask_claude(portfolio, prices, portfolio_value, news):
 
     portfolio_summary = {}
     symbol_map = {
-        "BETH": "BETHUSDT",
+        "WBETH": "WBETHUSDT",
         "BTC": "BTCUSDT",
         "XRP": "XRPUSDT",
         "TRX": "TRXUSDT"
@@ -161,7 +161,7 @@ PORTFOLIO (Συνολική αξία: ${portfolio_value:.2f} USDT):
 - Λάβε υπόψη τα news για sentiment ανάλυση
 
 Απάντησε ΜΟΝΟ με JSON χωρίς καμία άλλη εξήγηση:
-{{"action": "BUY" ή "SELL" ή "HOLD", "symbol": "BETHUSDT" ή "BTCUSDT" ή "XRPUSDT" ή "TRXUSDT" ή null, "amount_usdt": ποσό σε USDT ή null, "reason": "σύντομη εξήγηση", "confidence": 1-10}}"""
+{{"action": "BUY" ή "SELL" ή "HOLD", "symbol": "WBETHUSDT" ή "BTCUSDT" ή "XRPUSDT" ή "TRXUSDT" ή null, "amount_usdt": ποσό σε USDT ή null, "reason": "σύντομη εξήγηση", "confidence": 1-10}}"""
 
     message = ai_client.messages.create(
         model="claude-haiku-4-5",
