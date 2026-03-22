@@ -4,9 +4,8 @@ import os
 import json
 import re
 import requests
-import numpy as np
 from binance.client import Client
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # API Keys
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
@@ -18,10 +17,10 @@ MIN_TRADE_EUR = 1
 MAX_TRADE_PERCENT = 0.30
 STOP_LOSS_PERCENT = 0.05
 CONFIDENCE_THRESHOLD = 7
-INTERVAL_SECONDS = 900  # 15 minutes
-WIN_RATE_THRESHOLD = 0.60  # 60% win rate
-DRAWDOWN_LIMIT = 0.40  # 40% max drawdown
-TARGET_GROWTH = 1.00  # 100% growth target per 2 weeks
+INTERVAL_SECONDS = 900
+WIN_RATE_THRESHOLD = 0.60
+DRAWDOWN_LIMIT = 0.40
+TARGET_GROWTH = 1.00
 TRADE_HISTORY_FILE = "trade_history.json"
 PORTFOLIO_BASELINE_FILE = "portfolio_baseline.json"
 
@@ -39,21 +38,6 @@ def save_json_file(filepath, data):
     except Exception as e:
         print(f"⚠️ Could not save {filepath}: {e}")
 
-def get_all_eur_symbols(client):
-    """Gets all EUR trading pairs from Binance"""
-    try:
-        info = client.get_exchange_info()
-        symbols = [
-            s['symbol'] for s in info['symbols']
-            if s['quoteAsset'] == 'EUR'
-            and s['status'] == 'TRADING'
-            and s['isSpotTradingAllowed']
-        ]
-        return symbols
-    except Exception as e:
-        print(f"⚠️ Could not fetch EUR symbols: {e}")
-        return ["BTCEUR", "ETHEUR", "XRPEUR", "TRXEUR"]
-
 def get_portfolio(client):
     account = client.get_account()
     portfolio = {}
@@ -64,13 +48,14 @@ def get_portfolio(client):
     return portfolio
 
 def get_top_eur_symbols(client, limit=10):
-    """Gets top EUR pairs by volume"""
     try:
-        all_symbols = get_all_eur_symbols(client)
+        info = client.get_exchange_info()
+        valid = {s['symbol'] for s in info['symbols'] if s['status'] == 'TRADING' and s['isSpotTradingAllowed']}
         tickers = client.get_ticker()
         eur_tickers = [
             t for t in tickers
-            if t['symbol'] in all_symbols
+            if t['symbol'] in valid
+            and t['symbol'].endswith('EUR')
         ]
         sorted_tickers = sorted(eur_tickers, key=lambda x: float(x['quoteVolume']), reverse=True)
         return [t['symbol'] for t in sorted_tickers[:limit]]
@@ -79,7 +64,6 @@ def get_top_eur_symbols(client, limit=10):
         return ["BTCEUR", "ETHEUR", "XRPEUR"]
 
 def calculate_rsi(prices, period=14):
-    """Calculates RSI indicator"""
     if len(prices) < period + 1:
         return 50
     deltas = [prices[i+1] - prices[i] for i in range(len(prices)-1)]
@@ -93,7 +77,6 @@ def calculate_rsi(prices, period=14):
     return round(100 - (100 / (1 + rs)), 2)
 
 def calculate_macd(prices, fast=12, slow=26, signal=9):
-    """Calculates MACD indicator"""
     if len(prices) < slow:
         return 0, 0, 0
     def ema(data, period):
@@ -110,7 +93,6 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
     return round(macd_line, 4), round(signal_line, 4), round(histogram, 4)
 
 def calculate_bollinger_bands(prices, period=20, std_dev=2):
-    """Calculates Bollinger Bands"""
     if len(prices) < period:
         return prices[-1], prices[-1], prices[-1]
     recent = prices[-period:]
@@ -120,7 +102,6 @@ def calculate_bollinger_bands(prices, period=20, std_dev=2):
     return round(mean + std_dev * std, 4), round(mean, 4), round(mean - std_dev * std, 4)
 
 def calculate_moving_averages(prices):
-    """Calculates MA7, MA25, MA99"""
     def ma(data, period):
         if len(data) < period:
             return None
@@ -132,9 +113,16 @@ def calculate_moving_averages(prices):
     }
 
 def get_market_data(client, symbols):
-    """Gets full market data with technical indicators for given symbols"""
     market_data = {}
-    for symbol in symbols:
+
+    try:
+        info = client.get_exchange_info()
+        valid = {s['symbol'] for s in info['symbols'] if s['status'] == 'TRADING'}
+        valid_symbols = [s for s in symbols if s in valid]
+    except:
+        valid_symbols = symbols
+
+    for symbol in valid_symbols:
         try:
             ticker = client.get_ticker(symbol=symbol)
             klines_1h = client.get_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1HOUR, limit=100)
@@ -169,6 +157,7 @@ def get_market_data(client, symbols):
             }
         except Exception as e:
             print(f"⚠️ Could not get data for {symbol}: {e}")
+
     return market_data
 
 def get_crypto_news():
@@ -185,7 +174,6 @@ def get_crypto_news():
         return []
 
 def calculate_portfolio_value(portfolio, market_data, client):
-    """Calculates total portfolio value in EUR"""
     total = portfolio.get("EUR", 0)
     for coin, amount in portfolio.items():
         if coin == "EUR":
@@ -194,7 +182,6 @@ def calculate_portfolio_value(portfolio, market_data, client):
         if symbol in market_data:
             total += amount * market_data[symbol]["current_price"]
         else:
-            # Try to get price directly
             try:
                 ticker = client.get_ticker(symbol=symbol)
                 total += amount * float(ticker['lastPrice'])
@@ -203,7 +190,6 @@ def calculate_portfolio_value(portfolio, market_data, client):
     return total
 
 def calculate_win_rate(trade_history):
-    """Calculates win rate from closed trades"""
     closed_trades = [t for t in trade_history if t.get("profit_eur") is not None]
     if len(closed_trades) < 5:
         return None, len(closed_trades)
@@ -211,7 +197,6 @@ def calculate_win_rate(trade_history):
     return round(wins / len(closed_trades), 2), len(closed_trades)
 
 def determine_strategy(trade_history, portfolio_value, baseline_value):
-    """Determines trading strategy based on performance"""
     win_rate, total_trades = calculate_win_rate(trade_history)
     drawdown = (baseline_value - portfolio_value) / baseline_value if baseline_value > 0 else 0
 
@@ -221,10 +206,12 @@ def determine_strategy(trade_history, portfolio_value, baseline_value):
     if win_rate is not None and win_rate < WIN_RATE_THRESHOLD:
         return "CONSERVATIVE", f"Win rate {win_rate*100:.1f}% below {WIN_RATE_THRESHOLD*100:.0f}% threshold — switching to conservative mode"
 
-    return "AGGRESSIVE", f"Win rate: {win_rate*100:.1f}% ({total_trades} trades)" if win_rate else "AGGRESSIVE", "Not enough trade history yet — using aggressive strategy"
+    if win_rate is not None:
+        return "AGGRESSIVE", f"Win rate: {win_rate*100:.1f}% ({total_trades} trades)"
+
+    return "AGGRESSIVE", "Not enough trade history yet — using aggressive strategy"
 
 def update_trade_profits(trade_history, market_data):
-    """Updates profit/loss for open trades"""
     for trade in trade_history:
         if trade.get("action") == "BUY" and trade.get("profit_eur") is None:
             symbol = trade.get("symbol")
@@ -238,15 +225,38 @@ def update_trade_profits(trade_history, market_data):
                     trade["current_profit_pct"] = round(price_change * 100, 2)
     return trade_history
 
+def check_stop_loss(client, portfolio, market_data, trade_history):
+    for trade in trade_history:
+        if trade.get("action") == "BUY" and trade.get("closed") != True:
+            symbol = trade.get("symbol")
+            entry_price = trade.get("entry_price", 0)
+            if symbol and symbol in market_data and entry_price > 0:
+                current_price = market_data[symbol]["current_price"]
+                loss_pct = (entry_price - current_price) / entry_price
+                if loss_pct >= STOP_LOSS_PERCENT:
+                    coin = symbol.replace("EUR", "")
+                    amount = portfolio.get(coin, 0)
+                    if amount > 0:
+                        print(f"🚨 STOP-LOSS triggered for {coin}! Loss: {loss_pct*100:.1f}%")
+                        try:
+                            client.order_market_sell(symbol=symbol, quantity=round(amount, 6))
+                            profit_eur = round(-trade.get("amount_eur", 0) * loss_pct, 2)
+                            trade["closed"] = True
+                            trade["profit_eur"] = profit_eur
+                            trade["close_time"] = str(datetime.now())
+                            print(f"✅ Stop-loss executed for {coin} | Loss: €{abs(profit_eur):.2f}")
+                        except Exception as e:
+                            print(f"❌ ERROR stop-loss {coin}: {e}")
+
 def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason):
     ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     eur_available = portfolio.get("EUR", 0)
     win_rate, total_trades = calculate_win_rate(trade_history)
 
-    # Build portfolio summary with EUR values
     portfolio_summary = {}
     tradeable_positions = []
+
     for coin, amount in portfolio.items():
         if coin == "EUR":
             portfolio_summary[coin] = {"amount": amount, "value_eur": amount}
@@ -264,15 +274,11 @@ def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, tr
                 if value >= MIN_TRADE_EUR:
                     tradeable_positions.append(f"{coin} (€{value:.2f})")
 
-    # Recent trade history
     recent_history = trade_history[-10:] if trade_history else []
     news_text = "\n".join([f"- {n}" for n in news]) if news else "No news available"
-
-    # Growth target info
     target_value = baseline_value * (1 + TARGET_GROWTH)
     growth_needed = ((target_value - portfolio_value) / portfolio_value) * 100
 
-    strategy_instructions = ""
     if strategy == "CONSERVATIVE":
         strategy_instructions = """
 STRATEGY: CONSERVATIVE MODE
@@ -323,7 +329,7 @@ RECENT TRADE HISTORY (last 10):
 STRICT RULES:
 - You can ONLY trade positions listed under TRADEABLE POSITIONS
 - Minimum trade: €{MIN_TRADE_EUR}
-- If you want to BUY but EUR is insufficient, you MUST first include a SELL of an existing position to generate EUR
+- If you want to BUY but EUR is insufficient, you MUST first include a SELL of an existing position to generate EUR — there are no other funding sources, only what is in the portfolio
 - Total EUR spent on BUYs must never exceed available EUR plus EUR generated by SELLs in this decision list
 - SELL orders must always come before BUY orders
 - If no clear opportunity exists, return a single HOLD
@@ -347,35 +353,10 @@ Respond ONLY with a JSON array, no explanation, no markdown:
     else:
         raise ValueError("No JSON array found in response")
 
-def check_stop_loss(client, portfolio, market_data, trade_history):
-    """Checks and executes stop-loss for open positions"""
-    for trade in trade_history:
-        if trade.get("action") == "BUY" and trade.get("closed") != True:
-            symbol = trade.get("symbol")
-            entry_price = trade.get("entry_price", 0)
-            if symbol and symbol in market_data and entry_price > 0:
-                current_price = market_data[symbol]["current_price"]
-                loss_pct = (entry_price - current_price) / entry_price
-                if loss_pct >= STOP_LOSS_PERCENT:
-                    coin = symbol.replace("EUR", "")
-                    amount = portfolio.get(coin, 0)
-                    if amount > 0:
-                        print(f"🚨 STOP-LOSS triggered for {coin}! Loss: {loss_pct*100:.1f}%")
-                        try:
-                            client.order_market_sell(symbol=symbol, quantity=round(amount, 6))
-                            profit_eur = round(-trade.get("amount_eur", 0) * loss_pct, 2)
-                            trade["closed"] = True
-                            trade["profit_eur"] = profit_eur
-                            trade["close_time"] = str(datetime.now())
-                            print(f"✅ Stop-loss executed for {coin} | Loss: €{abs(profit_eur):.2f}")
-                        except Exception as e:
-                            print(f"❌ ERROR stop-loss {coin}: {e}")
-
 def execute_trades(client, decisions, portfolio, portfolio_value, market_data, trade_history):
     sells = [d for d in decisions if d.get("action") == "SELL" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     buys = [d for d in decisions if d.get("action") == "BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
 
-    # Execute SELLs first
     for decision in sells:
         symbol = decision.get("symbol")
         amount_eur = decision.get("amount_eur")
@@ -402,7 +383,6 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
             client.order_market_sell(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
             print(f"✅ SELL {symbol}: €{amount_eur:.2f}")
 
-            # Mark related BUY trades as closed
             for trade in trade_history:
                 if trade.get("symbol") == symbol and trade.get("action") == "BUY" and not trade.get("closed"):
                     entry_price = trade.get("entry_price", 0)
@@ -425,11 +405,9 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         except Exception as e:
             print(f"❌ ERROR SELL {symbol}: {e}")
 
-    # Refresh portfolio
     portfolio = get_portfolio(client)
     eur_available = portfolio.get("EUR", 0)
 
-    # Execute BUYs
     for decision in buys:
         symbol = decision.get("symbol")
         amount_eur = decision.get("amount_eur")
@@ -455,7 +433,7 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
                 continue
 
         try:
-            order = client.order_market_buy(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
+            client.order_market_buy(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
             current_price = market_data.get(symbol, {}).get("current_price", 0)
             print(f"✅ BUY {symbol}: €{amount_eur:.2f} @ €{current_price:.4f}")
             eur_available -= amount_eur
@@ -483,7 +461,6 @@ def main():
 
     binance_client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
-    # Load persistent data
     trade_history = load_json_file(TRADE_HISTORY_FILE, [])
     portfolio_baseline = load_json_file(PORTFOLIO_BASELINE_FILE, {})
 
@@ -492,11 +469,9 @@ def main():
             print(f"\n{'='*50}")
             print(f"📊 Analysis - {datetime.now()}")
 
-            # Get portfolio and top symbols
             portfolio = get_portfolio(binance_client)
             top_symbols = get_top_eur_symbols(binance_client, limit=10)
 
-            # Add symbols for coins already in portfolio
             for coin in portfolio:
                 if coin != "EUR":
                     sym = f"{coin}EUR"
@@ -505,11 +480,9 @@ def main():
 
             print(f"📋 Watching {len(top_symbols)} symbols")
 
-            # Get market data with indicators
             market_data = get_market_data(binance_client, top_symbols)
             portfolio_value = calculate_portfolio_value(portfolio, market_data, binance_client)
 
-            # Set baseline if first run
             if not portfolio_baseline or "value" not in portfolio_baseline:
                 portfolio_baseline = {
                     "value": portfolio_value,
@@ -530,37 +503,27 @@ def main():
                         value = amount * market_data[symbol]["current_price"]
                         print(f"   {coin}: {amount:.6f} (€{value:.2f})")
 
-            # News
             print("📰 Fetching news...")
             news = get_crypto_news()
             print(f"   Found {len(news)} items")
 
-            # Update open trade profits
             trade_history = update_trade_profits(trade_history, market_data)
-
-            # Check stop-loss
             check_stop_loss(binance_client, portfolio, market_data, trade_history)
 
-            # Determine strategy
             strategy, strategy_reason = determine_strategy(trade_history, portfolio_value, baseline_value)
             print(f"🎯 Strategy: {strategy} — {strategy_reason}")
 
-            # Win rate display
             win_rate, total_trades = calculate_win_rate(trade_history)
             if win_rate is not None:
                 print(f"📈 Win rate: {win_rate*100:.1f}% ({total_trades} trades)")
 
-            # Ask Claude
             decisions = ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason)
             print(f"🧠 Claude suggested {len(decisions)} decision(s):")
             for d in decisions:
                 print(f"   → {d['action']} | {d.get('symbol', '-')} | €{d.get('amount_eur', 0):.2f} | Confidence: {d['confidence']}/10")
                 print(f"     Reason: {d['reason']}")
 
-            # Execute trades
             trade_history = execute_trades(binance_client, decisions, portfolio, portfolio_value, market_data, trade_history)
-
-            # Save trade history
             save_json_file(TRADE_HISTORY_FILE, trade_history)
 
         except Exception as e:
@@ -571,3 +534,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
