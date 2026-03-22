@@ -142,7 +142,7 @@ PORTFOLIO (Συνολική αξία: €{portfolio_value:.2f} EUR):
 {json.dumps(portfolio_summary, indent=2)}
 
 ΔΕΔΟΜΕΝΑ ΑΓΟΡΑΣ (τελευταίες 24 ώρες):
-{json.dumps({s: {{k: v for k, v in d.items() if k != 'prices_24h'}} for s, d in prices.items()}, indent=2)}
+{json.dumps({s: {k: v for k, v in d.items() if k != 'prices_24h'} for s, d in prices.items()}, indent=2)}
 
 ΤΕΛΕΥΤΑΙΑ CRYPTO NEWS:
 {news_text}
