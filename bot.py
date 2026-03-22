@@ -12,7 +12,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 
-# Ρυθμίσεις
+# Settings
 TRADE_SYMBOLS = ["ETHEUR", "BTCEUR", "XRPEUR", "TRXEUR"]
 MAX_TRADE_PERCENT = 0.30
 STOP_LOSS_PERCENT = 0.05
@@ -60,7 +60,7 @@ def get_crypto_news():
         news = titles[1:6] if len(titles) > 1 else []
         return news
     except Exception as e:
-        print(f"⚠️ Δεν ήταν δυνατή η λήψη news: {e}")
+        print(f"WARNING: Could not fetch news: {e}")
         return []
 
 def calculate_portfolio_value(portfolio, prices):
@@ -93,10 +93,10 @@ def check_stop_loss(client, portfolio, prices, entry_prices):
             loss_percent = (entry_price - current_price) / entry_price
             if loss_percent >= STOP_LOSS_PERCENT:
                 amount = portfolio[coin]
-                print(f"🚨 STOP-LOSS triggered για {coin}! Απώλεια: {loss_percent*100:.1f}%")
+                print(f"STOP-LOSS triggered for {coin}! Loss: {loss_percent*100:.1f}%")
                 try:
                     client.order_market_sell(symbol=symbol, quantity=round(amount, 6))
-                    print(f"✅ Stop-loss sell εκτελέστηκε για {coin}")
+                    print(f"STOP-LOSS sell executed for {coin}")
                     trade_history.append({
                         "time": str(datetime.now()),
                         "action": "SELL (STOP-LOSS)",
@@ -105,7 +105,7 @@ def check_stop_loss(client, portfolio, prices, entry_prices):
                     })
                     del entry_prices[coin]
                 except Exception as e:
-                    print(f"❌ Σφάλμα stop-loss για {coin}: {e}")
+                    print(f"ERROR stop-loss for {coin}: {e}")
 
 def ask_claude(portfolio, prices, portfolio_value, news):
     ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -131,32 +131,34 @@ def ask_claude(portfolio, prices, portfolio_value, news):
             }
 
     recent_history = trade_history[-5:] if trade_history else []
-    news_text = "\n".join([f"- {n}" for n in news]) if news else "Δεν υπάρχουν διαθέσιμα νέα"
+    news_text = "\n".join([f"- {n}" for n in news]) if news else "No news available"
+    eur_available = portfolio.get("EUR", 0)
 
-    prompt = f"""Είσαι ένας έμπειρος crypto trader. Ανάλυσε όλες τις πληροφορίες και δώσε λίστα εντολών.
+    prompt = f"""You are an expert crypto trader managing a portfolio. Analyze all information and return a list of trading decisions.
 
-PORTFOLIO (Συνολική αξία: €{portfolio_value:.2f} EUR):
+PORTFOLIO (Total value: €{portfolio_value:.2f} EUR, Available EUR: €{eur_available:.2f}):
 {json.dumps(portfolio_summary, indent=2)}
 
-ΔΕΔΟΜΕΝΑ ΑΓΟΡΑΣ (τελευταίες 24 ώρες):
+MARKET DATA (last 24 hours):
 {json.dumps({s: {k: v for k, v in d.items() if k != 'prices_24h'} for s, d in prices.items()}, indent=2)}
 
-ΤΕΛΕΥΤΑΙΑ CRYPTO NEWS:
+LATEST CRYPTO NEWS:
 {news_text}
 
-ΙΣΤΟΡΙΚΟ ΤΕΛΕΥΤΑΙΩΝ TRADES:
-{json.dumps(recent_history, indent=2) if recent_history else "Δεν υπάρχει ιστορικό ακόμα"}
+LAST 5 TRADES HISTORY:
+{json.dumps(recent_history, indent=2) if recent_history else "No trade history yet"}
 
-ΚΑΝΟΝΕΣ:
-- Μέγιστο 30% του portfolio ανά trade
-- Ελάχιστο trade: €10 EUR — αν η αξία ενός coin είναι κάτω από €10 μην το πουλάς
-- ΠΑΝΤΑ να αναφέρεις amount_eur για κάθε εντολή
-- Αν θέλεις να κάνεις BUY αλλά δεν υπάρχει αρκετό EUR, πρόσθεσε πρώτα SELL για να δημιουργηθεί EUR
-- Βεβαιώσου ότι το συνολικό ποσό των BUY δεν ξεπερνά το συνολικό ποσό των SELL συν το διαθέσιμο EUR
-- Λάβε υπόψη το ιστορικό για να αποφύγεις overtrading
-- Λάβε υπόψη τα news για sentiment ανάλυση
+STRICT RULES:
+- Maximum 30% of portfolio per trade
+- Minimum trade: €{MIN_TRADE_EUR} EUR
+- Do NOT suggest a BUY if there is not enough EUR available
+- If you want to BUY but EUR is insufficient, you MUST include a SELL first to generate EUR — never suggest a BUY without enough EUR or without generating it first via a SELL
+- Never suggest selling a position worth less than €{MIN_TRADE_EUR}
+- SELL orders must always come before BUY orders in the list
+- Use trade history to avoid overtrading
+- Use news for sentiment analysis
 
-Απάντησε ΜΟΝΟ με JSON array χωρίς καμία άλλη εξήγηση. Τα SELL να είναι πάντα πρώτα:
+Respond ONLY with a JSON array, no explanation, no markdown:
 [
   {{"action": "SELL", "symbol": "XRPEUR", "amount_eur": 50.00, "reason": "...", "confidence": 8}},
   {{"action": "BUY", "symbol": "BTCEUR", "amount_eur": 50.00, "reason": "...", "confidence": 8}}
@@ -176,15 +178,12 @@ PORTFOLIO (Συνολική αξία: €{portfolio_value:.2f} EUR):
         raise ValueError("No JSON array found in response")
 
 def execute_trades(client, decisions, portfolio, portfolio_value, entry_prices, prices):
-    """Εκτελεί λίστα trades — πρώτα SELL μετά BUY με έλεγχο διαθέσιμου EUR"""
-
     sells = [d for d in decisions if d.get("action") == "SELL" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     buys = [d for d in decisions if d.get("action") == "BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
-    
-    # Παρακολούθηση πόσο EUR δημιουργήθηκε από SELL
-    eur_from_sells = 0.0
 
-    # Εκτέλεση SELL πρώτα
+    eur_available = portfolio.get("EUR", 0)
+
+    # Execute SELLs first
     for decision in sells:
         symbol = decision.get("symbol")
         amount_eur = decision.get("amount_eur")
@@ -195,22 +194,22 @@ def execute_trades(client, decisions, portfolio, portfolio_value, entry_prices, 
         max_allowed = portfolio_value * MAX_TRADE_PERCENT
         if amount_eur > max_allowed:
             amount_eur = max_allowed
-            print(f"⚠️ SELL ποσό περιορίστηκε στο 30%: €{amount_eur:.2f}")
+            print(f"WARNING: SELL amount capped at 30%: €{amount_eur:.2f}")
 
         if amount_eur < MIN_TRADE_EUR:
-            print(f"⚠️ SELL {symbol}: ποσό €{amount_eur:.2f} κάτω από minimum — παράλειψη")
+            print(f"WARNING: SELL {symbol}: amount €{amount_eur:.2f} below minimum — skipping")
             continue
 
         coin = symbol.replace("EUR", "")
         coin_value = portfolio.get(coin, 0) * prices[symbol]["current"]
         if coin_value < MIN_TRADE_EUR:
-            print(f"⚠️ SELL {symbol}: αξία θέσης €{coin_value:.2f} κάτω από minimum — παράλειψη")
+            print(f"WARNING: SELL {symbol}: position value €{coin_value:.2f} below minimum — skipping")
             continue
 
         try:
             client.order_market_sell(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
-            print(f"✅ SELL {symbol}: €{amount_eur:.2f} EUR")
-            eur_from_sells += amount_eur
+            print(f"SELL executed {symbol}: €{amount_eur:.2f} EUR")
+            eur_available += amount_eur
             trade_history.append({
                 "time": str(datetime.now()),
                 "action": "SELL",
@@ -219,13 +218,13 @@ def execute_trades(client, decisions, portfolio, portfolio_value, entry_prices, 
                 "reason": decision.get("reason", "")
             })
         except Exception as e:
-            print(f"❌ Σφάλμα SELL {symbol}: {e}")
+            print(f"ERROR SELL {symbol}: {e}")
 
-    # Ανανέωση portfolio μετά τα SELL
+    # Refresh portfolio after SELLs
     portfolio = get_portfolio(client)
     eur_available = portfolio.get("EUR", 0)
 
-    # Εκτέλεση BUY με έλεγχο διαθέσιμου EUR
+    # Execute BUYs
     for decision in buys:
         symbol = decision.get("symbol")
         amount_eur = decision.get("amount_eur")
@@ -236,23 +235,23 @@ def execute_trades(client, decisions, portfolio, portfolio_value, entry_prices, 
         max_allowed = portfolio_value * MAX_TRADE_PERCENT
         if amount_eur > max_allowed:
             amount_eur = max_allowed
-            print(f"⚠️ BUY ποσό περιορίστηκε στο 30%: €{amount_eur:.2f}")
+            print(f"WARNING: BUY amount capped at 30%: €{amount_eur:.2f}")
 
         if amount_eur < MIN_TRADE_EUR:
-            print(f"⚠️ BUY {symbol}: ποσό €{amount_eur:.2f} κάτω από minimum — παράλειψη")
+            print(f"WARNING: BUY {symbol}: amount €{amount_eur:.2f} below minimum — skipping")
             continue
 
         if eur_available < amount_eur:
             if eur_available >= MIN_TRADE_EUR:
-                print(f"⚠️ BUY {symbol}: ανεπαρκές EUR — αγορά με διαθέσιμο ποσό €{eur_available:.2f}")
+                print(f"WARNING: BUY {symbol}: insufficient EUR — buying with available €{eur_available:.2f}")
                 amount_eur = eur_available
             else:
-                print(f"⚠️ BUY {symbol}: ανεπαρκές EUR (€{eur_available:.2f}) — παράλειψη")
+                print(f"WARNING: BUY {symbol}: insufficient EUR (€{eur_available:.2f}) — skipping")
                 continue
 
         try:
             client.order_market_buy(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
-            print(f"✅ BUY {symbol}: €{amount_eur:.2f} EUR")
+            print(f"BUY executed {symbol}: €{amount_eur:.2f} EUR")
             eur_available -= amount_eur
             coin = symbol.replace("EUR", "")
             entry_prices[coin] = prices[symbol]["current"]
@@ -264,12 +263,12 @@ def execute_trades(client, decisions, portfolio, portfolio_value, entry_prices, 
                 "reason": decision.get("reason", "")
             })
         except Exception as e:
-            print(f"❌ Σφάλμα BUY {symbol}: {e}")
+            print(f"ERROR BUY {symbol}: {e}")
 
 def main():
-    print(f"🤖 Trading Bot ξεκίνησε - {datetime.now()}")
-    print(f"📋 Coins: {TRADE_SYMBOLS}")
-    print(f"🛡️ Stop-loss: {STOP_LOSS_PERCENT*100}% | Max trade: {MAX_TRADE_PERCENT*100}%")
+    print(f"Trading Bot started - {datetime.now()}")
+    print(f"Coins: {TRADE_SYMBOLS}")
+    print(f"Stop-loss: {STOP_LOSS_PERCENT*100}% | Max trade: {MAX_TRADE_PERCENT*100}%")
 
     binance_client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
     entry_prices = {}
@@ -277,36 +276,36 @@ def main():
     while True:
         try:
             print(f"\n{'='*50}")
-            print(f"📊 Ανάλυση - {datetime.now()}")
+            print(f"Analysis - {datetime.now()}")
 
             portfolio = get_portfolio(binance_client)
             prices = get_prices(binance_client)
             portfolio_value = calculate_portfolio_value(portfolio, prices)
 
-            print(f"💼 Portfolio αξία: €{portfolio_value:.2f} EUR")
+            print(f"Portfolio value: €{portfolio_value:.2f} EUR")
             for coin, amount in portfolio.items():
                 print(f"   {coin}: {amount:.4f}")
 
-            print("📰 Λήψη crypto news...")
+            print("Fetching crypto news...")
             news = get_crypto_news()
             if news:
-                print(f"   Βρέθηκαν {len(news)} νέα")
+                print(f"   Found {len(news)} news items")
 
             check_stop_loss(binance_client, portfolio, prices, entry_prices)
 
             decisions = ask_claude(portfolio, prices, portfolio_value, news)
-            print(f"🧠 Ο Claude πρότεινε {len(decisions)} εντολές:")
+            print(f"Claude suggested {len(decisions)} decisions:")
 
             for d in decisions:
-                print(f"   → {d['action']} | {d.get('symbol', '-')} | €{d.get('amount_eur', 0):.2f} | Confidence: {d['confidence']}/10")
-                print(f"     Λόγος: {d['reason']}")
+                print(f"   -> {d['action']} | {d.get('symbol', '-')} | €{d.get('amount_eur', 0):.2f} | Confidence: {d['confidence']}/10")
+                print(f"      Reason: {d['reason']}")
 
             execute_trades(binance_client, decisions, portfolio, portfolio_value, entry_prices, prices)
 
         except Exception as e:
-            print(f"❌ Σφάλμα: {e}")
+            print(f"ERROR: {e}")
 
-        print(f"⏰ Επόμενη ανάλυση σε {INTERVAL_SECONDS//3600} ώρα...")
+        print(f"Next analysis in {INTERVAL_SECONDS//3600} hour(s)...")
         time.sleep(INTERVAL_SECONDS)
 
 if __name__ == "__main__":
