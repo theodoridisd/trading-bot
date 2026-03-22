@@ -13,10 +13,10 @@ BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 
 # Ρυθμίσεις
-TRADE_SYMBOLS = ["WBETHUSDT", "BTCUSDT", "XRPUSDT", "TRXUSDT"]
+TRADE_SYMBOLS = ["ETHEUR", "BTCEUR", "XRPEUR", "TRXEUR"]
 MAX_TRADE_PERCENT = 0.30
 STOP_LOSS_PERCENT = 0.05
-MIN_TRADE_USDT = 10
+MIN_TRADE_EUR = 10
 CONFIDENCE_THRESHOLD = 7
 INTERVAL_SECONDS = 3600  # 1 ώρα
 
@@ -26,7 +26,7 @@ trade_history = []
 def get_portfolio(client):
     account = client.get_account()
     portfolio = {}
-    relevant_coins = ["WBETH", "BTC", "XRP", "TRX", "USDT"]
+    relevant_coins = ["ETH", "BTC", "XRP", "TRX", "EUR"]
     for balance in account['balances']:
         asset = balance['asset']
         free = float(balance['free'])
@@ -58,9 +58,7 @@ def get_crypto_news():
             timeout=10,
             headers={"User-Agent": "Mozilla/5.0"}
         )
-        # Απλή εξαγωγή τίτλων από RSS
         titles = re.findall(r'<title><!\[CDATA\[(.*?)\]\]></title>', response.text)
-        # Παίρνουμε τους πρώτους 5 τίτλους (εκτός του πρώτου που είναι το όνομα του site)
         news = titles[1:6] if len(titles) > 1 else []
         return news
     except Exception as e:
@@ -68,15 +66,15 @@ def get_crypto_news():
         return []
 
 def calculate_portfolio_value(portfolio, prices):
-    total = portfolio.get("USDT", 0)
+    total = portfolio.get("EUR", 0)
     symbol_map = {
-        "WBETH": "WBETHUSDT",
-        "BTC": "BTCUSDT",
-        "XRP": "XRPUSDT",
-        "TRX": "TRXUSDT"
+        "ETH": "ETHEUR",
+        "BTC": "BTCEUR",
+        "XRP": "XRPEUR",
+        "TRX": "TRXEUR"
     }
     for coin, amount in portfolio.items():
-        if coin != "USDT" and coin in symbol_map:
+        if coin != "EUR" and coin in symbol_map:
             symbol = symbol_map[coin]
             if symbol in prices:
                 total += amount * prices[symbol]["current"]
@@ -84,10 +82,10 @@ def calculate_portfolio_value(portfolio, prices):
 
 def check_stop_loss(client, portfolio, prices, entry_prices):
     symbol_map = {
-        "WBETH": "WBETHUSDT",
-        "BTC": "BTCUSDT",
-        "XRP": "XRPUSDT",
-        "TRX": "TRXUSDT"
+        "ETH": "ETHEUR",
+        "BTC": "BTCEUR",
+        "XRP": "XRPEUR",
+        "TRX": "TRXEUR"
     }
     for coin in list(entry_prices.keys()):
         if coin in portfolio and coin in symbol_map:
@@ -117,32 +115,30 @@ def ask_claude(portfolio, prices, portfolio_value, news):
 
     portfolio_summary = {}
     symbol_map = {
-        "WBETH": "WBETHUSDT",
-        "BTC": "BTCUSDT",
-        "XRP": "XRPUSDT",
-        "TRX": "TRXUSDT"
+        "ETH": "ETHEUR",
+        "BTC": "BTCEUR",
+        "XRP": "XRPEUR",
+        "TRX": "TRXEUR"
     }
 
     for coin, amount in portfolio.items():
-        if coin == "USDT":
-            portfolio_summary[coin] = {"amount": amount, "value_usdt": amount}
+        if coin == "EUR":
+            portfolio_summary[coin] = {"amount": amount, "value_eur": amount}
         elif coin in symbol_map:
             symbol = symbol_map[coin]
             value = amount * prices[symbol]["current"]
             portfolio_summary[coin] = {
                 "amount": amount,
-                "value_usdt": round(value, 2),
+                "value_eur": round(value, 2),
                 "percent_of_portfolio": round((value/portfolio_value)*100, 1)
             }
 
-    # Τελευταία 5 trades για context
     recent_history = trade_history[-5:] if trade_history else []
-
     news_text = "\n".join([f"- {n}" for n in news]) if news else "Δεν υπάρχουν διαθέσιμα νέα"
 
     prompt = f"""Είσαι ένας έμπειρος crypto trader. Ανάλυσε όλες τις πληροφορίες και δώσε μία συγκεκριμένη εντολή.
 
-PORTFOLIO (Συνολική αξία: ${portfolio_value:.2f} USDT):
+PORTFOLIO (Συνολική αξία: €{portfolio_value:.2f} EUR):
 {json.dumps(portfolio_summary, indent=2)}
 
 ΔΕΔΟΜΕΝΑ ΑΓΟΡΑΣ (τελευταίες 24 ώρες):
@@ -156,12 +152,12 @@ PORTFOLIO (Συνολική αξία: ${portfolio_value:.2f} USDT):
 
 ΚΑΝΟΝΕΣ:
 - Μέγιστο 30% του portfolio ανά trade
-- Ελάχιστο trade: $10 USDT
+- Ελάχιστο trade: €10 EUR
 - Λάβε υπόψη το ιστορικό για να αποφύγεις overtrading
 - Λάβε υπόψη τα news για sentiment ανάλυση
 
 Απάντησε ΜΟΝΟ με JSON χωρίς καμία άλλη εξήγηση:
-{{"action": "BUY" ή "SELL" ή "HOLD", "symbol": "WBETHUSDT" ή "BTCUSDT" ή "XRPUSDT" ή "TRXUSDT" ή null, "amount_usdt": ποσό σε USDT ή null, "reason": "σύντομη εξήγηση", "confidence": 1-10}}"""
+{{"action": "BUY" ή "SELL" ή "HOLD", "symbol": "ETHEUR" ή "BTCEUR" ή "XRPEUR" ή "TRXEUR" ή null, "amount_eur": ποσό σε EUR ή null, "reason": "σύντομη εξήγηση", "confidence": 1-10}}"""
 
     message = ai_client.messages.create(
         model="claude-haiku-4-5",
@@ -179,7 +175,7 @@ PORTFOLIO (Συνολική αξία: ${portfolio_value:.2f} USDT):
 def execute_trade(client, decision, portfolio, portfolio_value):
     action = decision.get("action")
     symbol = decision.get("symbol")
-    amount_usdt = decision.get("amount_usdt")
+    amount_eur = decision.get("amount_eur")
 
     if action == "HOLD" or not symbol:
         print("⏸️ HOLD - Δεν εκτελείται trade")
@@ -192,39 +188,39 @@ def execute_trade(client, decision, portfolio, portfolio_value):
         return None
 
     max_allowed = portfolio_value * MAX_TRADE_PERCENT
-    if amount_usdt and amount_usdt > max_allowed:
-        amount_usdt = max_allowed
-        print(f"⚠️ Ποσό περιορίστηκε στο 30%: ${amount_usdt:.2f}")
+    if amount_eur and amount_eur > max_allowed:
+        amount_eur = max_allowed
+        print(f"⚠️ Ποσό περιορίστηκε στο 30%: €{amount_eur:.2f}")
 
-    if not amount_usdt or amount_usdt < MIN_TRADE_USDT:
-        print(f"⚠️ Ποσό κάτω από minimum (${MIN_TRADE_USDT}) - Παράλειψη")
+    if not amount_eur or amount_eur < MIN_TRADE_EUR:
+        print(f"⚠️ Ποσό κάτω από minimum (€{MIN_TRADE_EUR}) - Παράλειψη")
         return None
 
     try:
         if action == "BUY":
-            usdt_available = portfolio.get("USDT", 0)
-            if usdt_available < amount_usdt:
-                print(f"⚠️ Ανεπαρκές USDT ({usdt_available:.2f}) - Παράλειψη")
+            eur_available = portfolio.get("EUR", 0)
+            if eur_available < amount_eur:
+                print(f"⚠️ Ανεπαρκές EUR ({eur_available:.2f}) - Παράλειψη")
                 return None
-            order = client.order_market_buy(symbol=symbol, quoteOrderQty=round(amount_usdt, 2))
-            print(f"✅ BUY {symbol}: ${amount_usdt:.2f} USDT")
+            order = client.order_market_buy(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
+            print(f"✅ BUY {symbol}: €{amount_eur:.2f} EUR")
             trade_history.append({
                 "time": str(datetime.now()),
                 "action": "BUY",
                 "symbol": symbol,
-                "amount_usdt": amount_usdt,
+                "amount_eur": amount_eur,
                 "reason": decision.get("reason", "")
             })
             return order
 
         elif action == "SELL":
-            order = client.order_market_sell(symbol=symbol, quoteOrderQty=round(amount_usdt, 2))
-            print(f"✅ SELL {symbol}: ${amount_usdt:.2f} USDT")
+            order = client.order_market_sell(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
+            print(f"✅ SELL {symbol}: €{amount_eur:.2f} EUR")
             trade_history.append({
                 "time": str(datetime.now()),
                 "action": "SELL",
                 "symbol": symbol,
-                "amount_usdt": amount_usdt,
+                "amount_eur": amount_eur,
                 "reason": decision.get("reason", "")
             })
             return order
@@ -250,29 +246,25 @@ def main():
             prices = get_prices(binance_client)
             portfolio_value = calculate_portfolio_value(portfolio, prices)
 
-            print(f"💼 Portfolio αξία: ${portfolio_value:.2f} USDT")
+            print(f"💼 Portfolio αξία: €{portfolio_value:.2f} EUR")
             for coin, amount in portfolio.items():
                 print(f"   {coin}: {amount:.4f}")
 
-            # News
             print("📰 Λήψη crypto news...")
             news = get_crypto_news()
             if news:
                 print(f"   Βρέθηκαν {len(news)} νέα")
 
-            # Stop-loss
             check_stop_loss(binance_client, portfolio, prices, entry_prices)
 
-            # Απόφαση
             decision = ask_claude(portfolio, prices, portfolio_value, news)
             print(f"🧠 Απόφαση: {decision['action']} | {decision.get('symbol', '-')} | Confidence: {decision['confidence']}/10")
             print(f"📝 Λόγος: {decision['reason']}")
 
-            # Εκτέλεση
             if decision['confidence'] >= CONFIDENCE_THRESHOLD:
                 order = execute_trade(binance_client, decision, portfolio, portfolio_value)
                 if order and decision['action'] == 'BUY':
-                    coin = decision['symbol'].replace("USDT", "")
+                    coin = decision['symbol'].replace("EUR", "")
                     entry_prices[coin] = prices[decision['symbol']]["current"]
             else:
                 print(f"⚠️ Confidence {decision['confidence']}/10 < {CONFIDENCE_THRESHOLD} - Παράλειψη")
