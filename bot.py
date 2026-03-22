@@ -144,12 +144,12 @@ PORTFOLIO (Συνολική αξία: ${portfolio_value:.2f} USDT):
     )
     
     response_text = message.content[0].text
-import re
-    match = re.search(r'\{.*\}', response_text, re.DOTALL)
-    if match:
-        return json.loads(match.group())
-    else:
-        raise ValueError("No JSON found in response")
+    import re
+        match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        else:
+            raise ValueError("No JSON found in response")
 
 def execute_trade(client, decision, portfolio, portfolio_value):
     """Εκτελεί το trade με όλους τους ελέγχους ασφαλείας"""
