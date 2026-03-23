@@ -346,7 +346,7 @@ Respond ONLY with a JSON array, no explanation, no markdown:
 
     message = ai_client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=600,
+        max_tokens=1000,
         messages=[{"role": "user", "content": prompt}]
     )
 
@@ -354,8 +354,13 @@ Respond ONLY with a JSON array, no explanation, no markdown:
     match = re.search(r'\[.*\]', response_text, re.DOTALL)
     if match:
         return json.loads(match.group())
-    else:
-        raise ValueError("No JSON array found in response")
+    
+    # Fallback: maybe Claude returned a single object instead of array
+    match_obj = re.search(r'\{.*\}', response_text, re.DOTALL)
+    if match_obj:
+        return [json.loads(match_obj.group())]
+    
+    raise ValueError("No JSON array found in response")
 
 def execute_trades(client, decisions, portfolio, portfolio_value, market_data, trade_history):
     for d in decisions:
