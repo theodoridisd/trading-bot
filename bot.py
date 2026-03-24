@@ -19,7 +19,7 @@ STOP_LOSS_PERCENT = 0.05
 CONFIDENCE_THRESHOLD = 7
 INTERVAL_SECONDS = 900
 WIN_RATE_THRESHOLD = 0.60
-DRAWDOWN_LIMIT = 0.40
+DRAWDOWN_LIMIT = 0.30
 TARGET_GROWTH = 1.00
 TRADE_HISTORY_FILE = "trade_history.json"
 PORTFOLIO_BASELINE_FILE = "portfolio_baseline.json"
@@ -202,11 +202,8 @@ def determine_strategy(trade_history, portfolio_value, baseline_value):
     if drawdown >= DRAWDOWN_LIMIT:
         return "CONSERVATIVE", f"Portfolio down {drawdown*100:.1f}% from baseline — switching to conservative mode"
 
-    if win_rate is not None and win_rate < WIN_RATE_THRESHOLD:
-        return "CONSERVATIVE", f"Win rate {win_rate*100:.1f}% below {WIN_RATE_THRESHOLD*100:.0f}% threshold — switching to conservative mode"
-
     if win_rate is not None:
-        return "AGGRESSIVE", f"Win rate: {win_rate*100:.1f}% ({total_trades} trades)"
+        return "AGGRESSIVE", f"Win rate: {win_rate*100:.1f}% ({total_trades} trades) — target is 60%+"
 
     return "AGGRESSIVE", "Not enough trade history yet — using aggressive strategy"
 
