@@ -20,7 +20,7 @@ CONFIDENCE_THRESHOLD = 7
 INTERVAL_SECONDS = 900
 WIN_RATE_THRESHOLD = 0.60
 DRAWDOWN_LIMIT = 0.30
-TARGET_GROWTH = 0.20  # 20% per month
+TARGET_GROWTH = 0.20
 TRADE_HISTORY_FILE = "trade_history.json"
 PORTFOLIO_BASELINE_FILE = "portfolio_baseline.json"
 
@@ -359,7 +359,7 @@ Respond ONLY with a JSON array, no explanation, no markdown:
   {{"action": "SELL", "symbol": "ETHEUR", "amount_eur": 50.00, "reason": "...", "confidence": 8}},
   {{"action": "BUY", "symbol": "BTCEUR", "amount_eur": 50.00, "reason": "...", "confidence": 8}},
   {{"action": "SHORT", "symbol": "LINKEUR", "amount_eur": 30.00, "stop_loss_pct": 2.0, "reason": "...", "confidence": 9}},
-  {{"action": "MARGIN_BUY", "symbol": "SONEUR", "amount_eur": 30.00, "stop_loss_pct": 2.0, "reason": "...", "confidence": 9}}
+  {{"action": "MARGIN_BUY", "symbol": "SOLEUR", "amount_eur": 30.00, "stop_loss_pct": 2.0, "reason": "...", "confidence": 9}}
 ]"""
 
     message = ai_client.messages.create(
@@ -384,10 +384,6 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         if "confidence" not in d:
             d["confidence"] = 0
 
-for d in decisions:
-        if "confidence" not in d:
-            d["confidence"] = 0
-
     sells = [d for d in decisions if d.get("action") == "SELL" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     buys = [d for d in decisions if d.get("action") == "BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     shorts = [d for d in decisions if d.get("action") == "SHORT" and d.get("confidence", 0) >= 9]
@@ -395,14 +391,11 @@ for d in decisions:
 
     for decision in sells:
         symbol = decision.get("symbol")
-
-        # Auto-fix symbol if Claude forgot EUR suffix
         if symbol and not symbol.endswith("EUR"):
             symbol = f"{symbol}EUR"
             decision["symbol"] = symbol
 
         amount_eur = decision.get("amount_eur")
-
         if not symbol or not amount_eur:
             continue
 
@@ -452,14 +445,11 @@ for d in decisions:
 
     for decision in buys:
         symbol = decision.get("symbol")
-
-        # Auto-fix symbol if Claude forgot EUR suffix
         if symbol and not symbol.endswith("EUR"):
             symbol = f"{symbol}EUR"
             decision["symbol"] = symbol
 
         amount_eur = decision.get("amount_eur")
-
         if not symbol or not amount_eur:
             continue
 
@@ -499,14 +489,13 @@ for d in decisions:
         except Exception as e:
             print(f"❌ ERROR BUY {symbol}: {e}")
 
-    # Execute SHORTs
     for decision in shorts:
         symbol = decision.get("symbol")
-        amount_eur = decision.get("amount_eur")
-        stop_loss_pct = decision.get("stop_loss_pct", 2.0)
-
         if symbol and not symbol.endswith("EUR"):
             symbol = f"{symbol}EUR"
+
+        amount_eur = decision.get("amount_eur")
+        stop_loss_pct = decision.get("stop_loss_pct", 2.0)
 
         if not symbol or not amount_eur:
             continue
@@ -516,8 +505,7 @@ for d in decisions:
             print(f"⚠️ SHORT capped at 15%: €{amount_eur:.2f}")
 
         try:
-            # Margin short via Binance margin API
-            binance_client.create_margin_order(
+            client.create_margin_order(
                 symbol=symbol,
                 side="SELL",
                 type="MARKET",
@@ -539,14 +527,13 @@ for d in decisions:
         except Exception as e:
             print(f"❌ ERROR SHORT {symbol}: {e}")
 
-    # Execute MARGIN BUYs
     for decision in margin_buys:
         symbol = decision.get("symbol")
-        amount_eur = decision.get("amount_eur")
-        stop_loss_pct = decision.get("stop_loss_pct", 2.0)
-
         if symbol and not symbol.endswith("EUR"):
             symbol = f"{symbol}EUR"
+
+        amount_eur = decision.get("amount_eur")
+        stop_loss_pct = decision.get("stop_loss_pct", 2.0)
 
         if not symbol or not amount_eur:
             continue
@@ -556,7 +543,7 @@ for d in decisions:
             print(f"⚠️ MARGIN_BUY capped at 15%: €{amount_eur:.2f}")
 
         try:
-            binance_client.create_margin_order(
+            client.create_margin_order(
                 symbol=symbol,
                 side="BUY",
                 type="MARKET",
@@ -584,7 +571,7 @@ def main():
     print(f"🤖 Trading Bot started - {datetime.now()}")
     print(f"🛡️ Stop-loss: {STOP_LOSS_PERCENT*100}% | Max trade: {MAX_TRADE_PERCENT*100}%")
     print(f"⏰ Interval: {INTERVAL_SECONDS//60} minutes")
-    print(f"🎯 Target: +{TARGET_GROWTH*100:.0f}% per 2 weeks")
+    print(f"🎯 Target: +{TARGET_GROWTH*100:.0f}% per month")
 
     binance_client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
@@ -647,7 +634,7 @@ def main():
             decisions = ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason)
             print(f"🧠 Claude suggested {len(decisions)} decision(s):")
             for d in decisions:
-                print(f"   → {d['action']} | {d.get('symbol', '-')} | €{d.get('amount_eur', 0):.2f} | Confidence: {d['confidence']}/10")
+                print(f"   → {d['action']} | {d.get('symbol', '-')} | €{d.get('amount_eur', 0):.2f} | Confidence: {d.get('confidence', 0)}/10")
                 print(f"     Reason: {d['reason']}")
 
             trade_history = execute_trades(binance_client, decisions, portfolio, portfolio_value, market_data, trade_history)
