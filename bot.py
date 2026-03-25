@@ -4,25 +4,33 @@ import os
 import json
 import re
 import requests
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from binance.client import Client
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # API Keys
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
+EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 # Settings
 MIN_TRADE_EUR = 1
 MAX_TRADE_PERCENT = 0.30
 STOP_LOSS_PERCENT = 0.05
+TAKE_PROFIT_PERCENT = 0.08
 CONFIDENCE_THRESHOLD = 7
 INTERVAL_SECONDS = 900
-WIN_RATE_THRESHOLD = 0.60
 DRAWDOWN_LIMIT = 0.30
 TARGET_GROWTH = 0.20
+MAX_CONSECUTIVE_HOLDS = 8  # After 8 consecutive HOLDs (~2 hours), relax criteria
 TRADE_HISTORY_FILE = "trade_history.json"
 PORTFOLIO_BASELINE_FILE = "portfolio_baseline.json"
+DAILY_STATS_FILE = "daily_stats.json"
 
 def load_json_file(filepath, default):
     try:
@@ -207,6 +215,15 @@ def determine_strategy(trade_history, portfolio_value, baseline_value):
 
     return "AGGRESSIVE", "Not enough trade history yet — using aggressive strategy"
 
+def count_consecutive_holds(trade_history):
+    count = 0
+    for trade in reversed(trade_history):
+        if trade.get("action") == "HOLD":
+            count += 1
+        else:
+            break
+    return count
+
 def update_trade_profits(trade_history, market_data):
     for trade in trade_history:
         if trade.get("action") == "BUY" and trade.get("profit_eur") is None:
@@ -221,30 +238,130 @@ def update_trade_profits(trade_history, market_data):
                     trade["current_profit_pct"] = round(price_change * 100, 2)
     return trade_history
 
-def check_stop_loss(client, portfolio, market_data, trade_history):
+def check_stop_loss_and_take_profit(client, portfolio, market_data, trade_history):
     for trade in trade_history:
         if trade.get("action") == "BUY" and trade.get("closed") != True:
             symbol = trade.get("symbol")
             entry_price = trade.get("entry_price", 0)
             if symbol and symbol in market_data and entry_price > 0:
                 current_price = market_data[symbol]["current_price"]
-                loss_pct = (entry_price - current_price) / entry_price
-                if loss_pct >= STOP_LOSS_PERCENT:
-                    coin = symbol.replace("EUR", "")
-                    amount = portfolio.get(coin, 0)
-                    if amount > 0:
-                        print(f"🚨 STOP-LOSS triggered for {coin}! Loss: {loss_pct*100:.1f}%")
-                        try:
-                            client.order_market_sell(symbol=symbol, quantity=round(amount, 6))
-                            profit_eur = round(-trade.get("amount_eur", 0) * loss_pct, 2)
-                            trade["closed"] = True
-                            trade["profit_eur"] = profit_eur
-                            trade["close_time"] = str(datetime.now())
-                            print(f"✅ Stop-loss executed for {coin} | Loss: €{abs(profit_eur):.2f}")
-                        except Exception as e:
-                            print(f"❌ ERROR stop-loss {coin}: {e}")
+                coin = symbol.replace("EUR", "")
+                amount = portfolio.get(coin, 0)
 
-def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason):
+                if amount <= 0:
+                    continue
+
+                loss_pct = (entry_price - current_price) / entry_price
+                gain_pct = (current_price - entry_price) / entry_price
+
+                # Stop-loss
+                if loss_pct >= STOP_LOSS_PERCENT:
+                    print(f"🚨 STOP-LOSS triggered for {coin}! Loss: {loss_pct*100:.1f}%")
+                    try:
+                        client.order_market_sell(symbol=symbol, quantity=round(amount, 6))
+                        profit_eur = round(-trade.get("amount_eur", 0) * loss_pct, 2)
+                        trade["closed"] = True
+                        trade["profit_eur"] = profit_eur
+                        trade["close_time"] = str(datetime.now())
+                        trade["close_reason"] = "STOP-LOSS"
+                        print(f"✅ Stop-loss executed for {coin} | Loss: €{abs(profit_eur):.2f}")
+                    except Exception as e:
+                        print(f"❌ ERROR stop-loss {coin}: {e}")
+
+                # Take-profit
+                elif gain_pct >= TAKE_PROFIT_PERCENT:
+                    print(f"🎯 TAKE-PROFIT triggered for {coin}! Gain: {gain_pct*100:.1f}%")
+                    try:
+                        client.order_market_sell(symbol=symbol, quantity=round(amount, 6))
+                        profit_eur = round(trade.get("amount_eur", 0) * gain_pct, 2)
+                        trade["closed"] = True
+                        trade["profit_eur"] = profit_eur
+                        trade["close_time"] = str(datetime.now())
+                        trade["close_reason"] = "TAKE-PROFIT"
+                        print(f"✅ Take-profit executed for {coin} | Profit: €{profit_eur:.2f}")
+                    except Exception as e:
+                        print(f"❌ ERROR take-profit {coin}: {e}")
+
+def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stats):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
+        print("⚠️ Email not configured — skipping report")
+        return
+
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_trades = [t for t in trade_history if t.get("time", "").startswith(today)]
+
+        buys = [t for t in today_trades if t.get("action") == "BUY"]
+        sells = [t for t in today_trades if t.get("action") == "SELL"]
+        holds = [t for t in today_trades if t.get("action") == "HOLD"]
+        shorts = [t for t in today_trades if t.get("action") == "SHORT"]
+        margin_buys = [t for t in today_trades if t.get("action") == "MARGIN_BUY"]
+
+        closed_today = [t for t in today_trades if t.get("closed") and t.get("profit_eur") is not None]
+        total_pnl = sum(t.get("profit_eur", 0) for t in closed_today)
+        wins_today = sum(1 for t in closed_today if t.get("profit_eur", 0) > 0)
+        losses_today = sum(1 for t in closed_today if t.get("profit_eur", 0) <= 0)
+
+        win_rate, total_trades = calculate_win_rate(trade_history)
+        pnl_from_baseline = portfolio_value - baseline_value
+
+        errors_today = daily_stats.get("errors_today", 0)
+
+        subject = f"🤖 Trading Bot Daily Report — {today}"
+
+        body = f"""
+<html><body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+<h2>🤖 Trading Bot Daily Report</h2>
+<p><strong>Date:</strong> {today}</p>
+
+<h3>💼 Portfolio Summary</h3>
+<table border="1" cellpadding="8" cellspacing="0" width="100%">
+  <tr><td><strong>Current Value</strong></td><td>€{portfolio_value:.2f}</td></tr>
+  <tr><td><strong>Baseline Value</strong></td><td>€{baseline_value:.2f}</td></tr>
+  <tr><td><strong>PnL vs Baseline</strong></td><td style="color: {'green' if pnl_from_baseline >= 0 else 'red'}">€{pnl_from_baseline:.2f} ({(pnl_from_baseline/baseline_value)*100:.1f}%)</td></tr>
+  <tr><td><strong>Overall Win Rate</strong></td><td>{f"{win_rate*100:.1f}%" if win_rate else "N/A"} ({total_trades} closed trades)</td></tr>
+</table>
+
+<h3>📊 Today's Activity</h3>
+<table border="1" cellpadding="8" cellspacing="0" width="100%">
+  <tr><td><strong>BUYs</strong></td><td>{len(buys)}</td></tr>
+  <tr><td><strong>SELLs</strong></td><td>{len(sells)}</td></tr>
+  <tr><td><strong>HOLDs</strong></td><td>{len(holds)}</td></tr>
+  <tr><td><strong>SHORTs</strong></td><td>{len(shorts)}</td></tr>
+  <tr><td><strong>MARGIN BUYs</strong></td><td>{len(margin_buys)}</td></tr>
+  <tr><td><strong>Errors</strong></td><td style="color: {'red' if errors_today > 0 else 'green'}">{errors_today}</td></tr>
+</table>
+
+<h3>💰 Today's PnL</h3>
+<table border="1" cellpadding="8" cellspacing="0" width="100%">
+  <tr><td><strong>Closed Trades</strong></td><td>{len(closed_today)}</td></tr>
+  <tr><td><strong>Wins</strong></td><td style="color: green">{wins_today}</td></tr>
+  <tr><td><strong>Losses</strong></td><td style="color: red">{losses_today}</td></tr>
+  <tr><td><strong>Total PnL Today</strong></td><td style="color: {'green' if total_pnl >= 0 else 'red'}">€{total_pnl:.2f}</td></tr>
+</table>
+
+{"<h3>📋 Closed Trades Today</h3><table border='1' cellpadding='8' cellspacing='0' width='100%'><tr><th>Time</th><th>Action</th><th>Symbol</th><th>Amount</th><th>PnL</th><th>Reason</th></tr>" + "".join([f"<tr><td>{t.get('time','')[:16]}</td><td>{t.get('action','')}</td><td>{t.get('symbol','')}</td><td>€{t.get('amount_eur',0):.2f}</td><td style='color: {'green' if t.get('profit_eur',0) >= 0 else 'red'}'>€{t.get('profit_eur',0):.2f}</td><td>{t.get('close_reason','')}</td></tr>" for t in closed_today]) + "</table>" if closed_today else "<p>No closed trades today.</p>"}
+
+<br><p style="color: gray; font-size: 12px;">Trading Bot — Auto-generated report</p>
+</body></html>
+"""
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = EMAIL_RECEIVER
+        msg.attach(MIMEText(body, "html"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+
+        print(f"📧 Daily report sent to {EMAIL_RECEIVER}")
+
+    except Exception as e:
+        print(f"❌ ERROR sending email: {e}")
+
+def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason, consecutive_holds):
     ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     eur_available = portfolio.get("EUR", 0)
@@ -274,6 +391,17 @@ def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, tr
     target_value = baseline_value * (1 + TARGET_GROWTH)
     growth_needed = ((target_value - portfolio_value) / portfolio_value) * 100
 
+    # Relaxed criteria after too many consecutive HOLDs
+    hold_warning = ""
+    if consecutive_holds >= MAX_CONSECUTIVE_HOLDS:
+        hold_warning = f"""
+⚠️ OVERRIDE: You have made {consecutive_holds} consecutive HOLDs. The market may be in a ranging phase.
+You MUST make at least one trade this cycle. Relax entry criteria:
+- RSI_1h between 35-65 is acceptable if MACD histogram shows any directional signal
+- volume_trend > 1.0 is sufficient
+- Pick the BEST available opportunity even if not perfect
+- Minimum confidence for this override trade: 6/10"""
+
     if strategy == "CONSERVATIVE":
         strategy_instructions = """
 STRATEGY: CONSERVATIVE MODE (portfolio lost 30%+ from baseline)
@@ -284,7 +412,7 @@ STRATEGY: CONSERVATIVE MODE (portfolio lost 30%+ from baseline)
 - Only trade top 3 volume coins
 - NO margin or short trades in conservative mode"""
     else:
-        strategy_instructions = """
+        strategy_instructions = f"""
 STRATEGY: AGGRESSIVE MODE
 - Target 20% monthly growth through disciplined trading
 - STRICT ENTRY CRITERIA (ALL must be met for standard trades):
@@ -310,7 +438,8 @@ MARGIN & SHORT TRADING (extra strict criteria):
   * Price above MA7 AND MA25 (confirmed uptrend)
   * Stop-loss MANDATORY at -2% below entry (tight)
   * Maximum position size: 15% of portfolio
-- For margin/short trades use action "SHORT" or "MARGIN_BUY" in JSON"""
+- For margin/short trades use action "SHORT" or "MARGIN_BUY" in JSON
+{hold_warning}"""
 
     prompt = f"""You are an expert crypto trader. Your goal is to grow the portfolio by 20% per month through disciplined, high-conviction trading.
 
@@ -321,6 +450,7 @@ PERFORMANCE:
 - Growth still needed: {growth_needed:.1f}%
 - Win rate: {f"{win_rate*100:.1f}%" if win_rate else "N/A"} ({total_trades} closed trades)
 - Current strategy: {strategy} — {strategy_reason}
+- Consecutive HOLDs: {consecutive_holds}
 
 PORTFOLIO (Available EUR: €{eur_available:.2f}):
 {json.dumps(portfolio_summary, indent=2)}
@@ -428,6 +558,7 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
                         trade["closed"] = True
                         trade["profit_eur"] = profit_eur
                         trade["close_time"] = str(datetime.now())
+                        trade["close_reason"] = "MANUAL-SELL"
 
             trade_history.append({
                 "time": str(datetime.now()),
@@ -569,7 +700,7 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
 
 def main():
     print(f"🤖 Trading Bot started - {datetime.now()}")
-    print(f"🛡️ Stop-loss: {STOP_LOSS_PERCENT*100}% | Max trade: {MAX_TRADE_PERCENT*100}%")
+    print(f"🛡️ Stop-loss: {STOP_LOSS_PERCENT*100}% | Take-profit: {TAKE_PROFIT_PERCENT*100}%")
     print(f"⏰ Interval: {INTERVAL_SECONDS//60} minutes")
     print(f"🎯 Target: +{TARGET_GROWTH*100:.0f}% per month")
 
@@ -577,11 +708,21 @@ def main():
 
     trade_history = load_json_file(TRADE_HISTORY_FILE, [])
     portfolio_baseline = load_json_file(PORTFOLIO_BASELINE_FILE, {})
+    daily_stats = load_json_file(DAILY_STATS_FILE, {})
+
+    last_report_date = daily_stats.get("last_report_date", "")
+    errors_today = daily_stats.get("errors_today", 0)
 
     while True:
         try:
             print(f"\n{'='*50}")
             print(f"📊 Analysis - {datetime.now()}")
+
+            today = datetime.now().strftime("%Y-%m-%d")
+
+            # Reset daily error counter on new day
+            if today != last_report_date.split("T")[0] if "T" in last_report_date else last_report_date:
+                errors_today = 0
 
             portfolio = get_portfolio(binance_client)
             top_symbols = get_top_eur_symbols(binance_client, limit=10)
@@ -622,7 +763,7 @@ def main():
             print(f"   Found {len(news)} items")
 
             trade_history = update_trade_profits(trade_history, market_data)
-            check_stop_loss(binance_client, portfolio, market_data, trade_history)
+            check_stop_loss_and_take_profit(binance_client, portfolio, market_data, trade_history)
 
             strategy, strategy_reason = determine_strategy(trade_history, portfolio_value, baseline_value)
             print(f"🎯 Strategy: {strategy} — {strategy_reason}")
@@ -631,17 +772,42 @@ def main():
             if win_rate is not None:
                 print(f"📈 Win rate: {win_rate*100:.1f}% ({total_trades} trades)")
 
-            decisions = ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason)
+            consecutive_holds = count_consecutive_holds(trade_history)
+            if consecutive_holds > 0:
+                print(f"⏸️ Consecutive HOLDs: {consecutive_holds}/{MAX_CONSECUTIVE_HOLDS}")
+
+            decisions = ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason, consecutive_holds)
             print(f"🧠 Claude suggested {len(decisions)} decision(s):")
             for d in decisions:
                 print(f"   → {d['action']} | {d.get('symbol', '-')} | €{d.get('amount_eur', 0):.2f} | Confidence: {d.get('confidence', 0)}/10")
                 print(f"     Reason: {d['reason']}")
 
+            # Track HOLDs in history
+            for d in decisions:
+                if d.get("action") == "HOLD":
+                    trade_history.append({
+                        "time": str(datetime.now()),
+                        "action": "HOLD",
+                        "reason": d.get("reason", "")
+                    })
+
             trade_history = execute_trades(binance_client, decisions, portfolio, portfolio_value, market_data, trade_history)
             save_json_file(TRADE_HISTORY_FILE, trade_history)
 
+            # Send daily report at 23:00
+            current_hour = datetime.now().hour
+            if current_hour == 23 and today != last_report_date:
+                send_daily_report(trade_history, portfolio_value, baseline_value, {"errors_today": errors_today})
+                last_report_date = today
+                daily_stats = {"last_report_date": today, "errors_today": 0}
+                save_json_file(DAILY_STATS_FILE, daily_stats)
+                errors_today = 0
+
         except Exception as e:
             print(f"❌ ERROR: {e}")
+            errors_today += 1
+            daily_stats["errors_today"] = errors_today
+            save_json_file(DAILY_STATS_FILE, daily_stats)
 
         print(f"⏰ Next analysis in {INTERVAL_SECONDS//60} minutes...")
         time.sleep(INTERVAL_SECONDS)
