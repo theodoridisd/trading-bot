@@ -46,6 +46,52 @@ def save_json_file(filepath, data):
     except Exception as e:
         print(f"⚠️ Could not save {filepath}: {e}")
 
+def load_from_github(filename):
+    """Load JSON file from GitHub repository"""
+    try:
+        token = os.environ.get("GITHUB_TOKEN")
+        repo = os.environ.get("GITHUB_REPO")
+        url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            import base64
+            content = base64.b64decode(response.json()["content"]).decode("utf-8")
+            return json.loads(content)
+        return None
+    except Exception as e:
+        print(f"⚠️ Could not load {filename} from GitHub: {e}")
+        return None
+
+def save_to_github(filename, data):
+    """Save JSON file to GitHub repository"""
+    try:
+        token = os.environ.get("GITHUB_TOKEN")
+        repo = os.environ.get("GITHUB_REPO")
+        url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+
+        content = json.dumps(data, indent=2)
+        import base64
+        encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+
+        # Get current SHA if file exists
+        sha = None
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            sha = response.json()["sha"]
+
+        payload = {
+            "message": f"Update {filename}",
+            "content": encoded
+        }
+        if sha:
+            payload["sha"] = sha
+
+        requests.put(url, headers=headers, json=payload)
+    except Exception as e:
+        print(f"⚠️ Could not save {filename} to GitHub: {e}")
+
 def get_portfolio(client):
     account = client.get_account()
     portfolio = {}
@@ -708,9 +754,9 @@ def main():
 
     binance_client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
-    trade_history = load_json_file(TRADE_HISTORY_FILE, [])
-    portfolio_baseline = load_json_file(PORTFOLIO_BASELINE_FILE, {})
-    daily_stats = load_json_file(DAILY_STATS_FILE, {})
+    trade_history = load_from_github(TRADE_HISTORY_FILE) or load_json_file(TRADE_HISTORY_FILE, [])
+    portfolio_baseline = load_from_github(PORTFOLIO_BASELINE_FILE) or load_json_file(PORTFOLIO_BASELINE_FILE, {})
+    daily_stats = load_from_github(DAILY_STATS_FILE) or load_json_file(DAILY_STATS_FILE, {})
 
     last_report_date = daily_stats.get("last_report_date", "")
     errors_today = daily_stats.get("errors_today", 0)
@@ -795,6 +841,8 @@ def main():
 
             trade_history = execute_trades(binance_client, decisions, portfolio, portfolio_value, market_data, trade_history)
             save_json_file(TRADE_HISTORY_FILE, trade_history)
+            save_to_github(TRADE_HISTORY_FILE, trade_history)
+            save_to_github(PORTFOLIO_BASELINE_FILE, portfolio_baseline)
 
             # Send daily report at 23:00
             current_hour = datetime.now().hour
