@@ -24,10 +24,10 @@ MAX_TRADE_PERCENT = 0.30
 STOP_LOSS_PERCENT = 0.05
 TAKE_PROFIT_PERCENT = 0.08
 CONFIDENCE_THRESHOLD = 7
-INTERVAL_SECONDS = 900
+INTERVAL_SECONDS = 3600 # 1 hour
 DRAWDOWN_LIMIT = 0.30
 TARGET_GROWTH = 0.20
-MAX_CONSECUTIVE_HOLDS = 8  # After 8 consecutive HOLDs (~2 hours), relax criteria
+MAX_CONSECUTIVE_HOLDS = 6  # 6 hours before relaxing criteria
 TRADE_HISTORY_FILE = "trade_history.json"
 PORTFOLIO_BASELINE_FILE = "portfolio_baseline.json"
 DAILY_STATS_FILE = "daily_stats.json"
@@ -395,12 +395,14 @@ def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, tr
     hold_warning = ""
     if consecutive_holds >= MAX_CONSECUTIVE_HOLDS:
         hold_warning = f"""
-⚠️ OVERRIDE: You have made {consecutive_holds} consecutive HOLDs. The market may be in a ranging phase.
-You MUST make at least one trade this cycle. Relax entry criteria:
+⚠️ OVERRIDE: You have made {consecutive_holds} consecutive HOLDs ({consecutive_holds} hours of inactivity).
+Relax entry criteria for NEW trades only — but ONLY if EUR is already available:
+- Do NOT sell existing positions just to fund an override trade
 - RSI_1h between 35-65 is acceptable if MACD histogram shows any directional signal
 - volume_trend > 1.0 is sufficient
-- Pick the BEST available opportunity even if not perfect
-- Minimum confidence for this override trade: 6/10"""
+- Only use available EUR (€{portfolio.get('EUR', 0):.2f}) for any override trade
+- Minimum confidence for override trade: 6/10
+- If no good opportunity exists even with relaxed criteria, HOLD is still acceptable"""
 
     if strategy == "CONSERVATIVE":
         strategy_instructions = """
