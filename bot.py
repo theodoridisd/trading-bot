@@ -133,12 +133,7 @@ def calculate_rsi(prices, period=14):
 def calculate_macd(prices, fast=12, slow=26, signal=9):
     if len(prices) < slow + signal:
         return 0, 0, 0
-    def ema(data, period):
-        k = 2 / (period + 1)
-        ema_val = data[0]
-        for price in data[1:]:
-            ema_val = price * k + ema_val * (1 - k)
-        return ema_val
+
     def ema_series(data, period):
         k = 2 / (period + 1)
         result = [data[0]]
@@ -149,10 +144,18 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
     fast_ema = ema_series(prices, fast)
     slow_ema = ema_series(prices, slow)
     macd_line_series = [f - s for f, s in zip(fast_ema, slow_ema)]
-    signal_line = ema(macd_line_series[-signal*3:], signal)
+    signal_line = ema_series(macd_line_series, signal)[-1]
     macd_val = macd_line_series[-1]
     histogram = macd_val - signal_line
-    return round(macd_val, 4), round(signal_line, 4), round(histogram, 4)
+
+    # Normalize as percentage of current price to avoid scale issues
+    current_price = prices[-1]
+    if current_price > 0:
+        macd_val = round((macd_val / current_price) * 100, 4)
+        signal_line = round((signal_line / current_price) * 100, 4)
+        histogram = round((histogram / current_price) * 100, 4)
+
+    return macd_val, signal_line, histogram
 
 def calculate_bollinger_bands(prices, period=20, std_dev=2):
     if len(prices) < period:
