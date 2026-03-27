@@ -518,7 +518,7 @@ BUYABLE SYMBOLS (any of these can be bought if EUR is available):
 {', '.join(buyable_symbols)}
 
 MARKET DATA WITH TECHNICAL INDICATORS:
-{json.dumps(market_data, indent=2)}
+{json.dumps({s: {k: v for k, v in d.items() if k != 'closes_1h_sample'} for s, d in market_data.items()}, indent=2)}
 
 LATEST NEWS:
 {news_text}
@@ -550,7 +550,7 @@ Respond ONLY with a JSON array, no explanation, no markdown:
 
     message = ai_client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=1000,
+        max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
 
