@@ -340,7 +340,10 @@ def check_stop_loss_and_take_profit(client, portfolio, market_data, trade_histor
                         print(f"❌ ERROR take-profit {coin}: {e}")
 
 def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stats):
-    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY")
+    email_receiver = os.environ.get("EMAIL_RECEIVER")
+
+    if not sendgrid_key or not email_receiver:
         print("⚠️ Email not configured — skipping report")
         return
 
@@ -361,7 +364,6 @@ def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stat
 
         win_rate, total_trades = calculate_win_rate(trade_history)
         pnl_from_baseline = portfolio_value - baseline_value
-
         errors_today = daily_stats.get("errors_today", 0)
 
         subject = f"🤖 Trading Bot Daily Report — {today}"
@@ -403,17 +405,24 @@ def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stat
 </body></html>
 """
 
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_SENDER
-        msg["To"] = EMAIL_RECEIVER
-        msg.attach(MIMEText(body, "html"))
+        response = requests.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={
+                "Authorization": f"Bearer {sendgrid_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "personalizations": [{"to": [{"email": email_receiver}]}],
+                "from": {"email": email_receiver},
+                "subject": subject,
+                "content": [{"type": "text/html", "value": body}]
+            }
+        )
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-
-        print(f"📧 Daily report sent to {EMAIL_RECEIVER}")
+        if response.status_code == 202:
+            print(f"📧 Daily report sent to {email_receiver}")
+        else:
+            print(f"❌ Email error: {response.status_code} — {response.text}")
 
     except Exception as e:
         print(f"❌ ERROR sending email: {e}")
