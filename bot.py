@@ -516,12 +516,6 @@ Respond ONLY with JSON array, no explanation:
 
 def execute_trades(client, decisions, portfolio, portfolio_value, market_data, trade_history):
     for d in decisions:
-                # Check if symbol supports margin trading
-        try:
-            client.get_margin_asset(asset=symbol.replace("EUR", ""))
-        except:
-            print(f"⚠️ SHORT {symbol}: not a valid margin asset — skipping")
-            continue
         if "confidence" not in d:
             d["confidence"] = 0
 
@@ -622,6 +616,12 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         symbol = decision.get("symbol")
         if symbol and not symbol.endswith("EUR"):
             symbol = f"{symbol}EUR"
+                        # Check if symbol supports margin trading
+        try:
+            client.get_margin_asset(asset=symbol.replace("EUR", ""))
+        except:
+            print(f"⚠️ SHORT {symbol}: not a valid margin asset — skipping")
+            continue
         amount_eur = decision.get("amount_eur")
         stop_loss_pct = decision.get("stop_loss_pct", 2.0)
         if not symbol or not amount_eur:
