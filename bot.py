@@ -436,8 +436,10 @@ SHORT TRADING (margin — does NOT require EUR):
 - ONLY short symbols from SHORTABLE EUR SYMBOLS or SHORTABLE USDT SYMBOLS lists
 - Prefer EUR pairs — use USDT pairs only if EUR version not available
 - Execute SHORT when EITHER condition is met:
-  * RSI_1h > 78 AND volume_trend > 1.5
-  * RSI_1h > 82 (extreme overbought alone is sufficient)
+  * CONDITION A: RSI_1h > 78 AND volume_trend > 1.5 → confidence 7/10 → EXECUTE
+  * CONDITION B: RSI_1h > 82 → confidence 8/10 → EXECUTE IMMEDIATELY, no other criteria needed
+- XRPEUR RSI=82.39 RIGHT NOW meets CONDITION B → SHORT with confidence 8/10
+- Do NOT check volume or MACD when RSI > 82 — it is sufficient alone
 - Stop-loss MANDATORY at +2% above entry
 - Maximum 15% of portfolio
 - SHORT does NOT require EUR balance — execute independently
