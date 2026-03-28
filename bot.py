@@ -97,20 +97,6 @@ def get_top_eur_symbols(client, limit=10):
         print(f"⚠️ Could not fetch top symbols: {e}")
         return ["BTCEUR", "ETHEUR", "XRPEUR"]
 
-def get_margin_symbols(client):
-    """Gets valid margin trading symbols for EUR and USDT"""
-    margin_eur = []
-    margin_usdt = []
-    try:
-        all_margin = client.get_margin_all_pairs()
-        margin_eur = [p['symbol'] for p in all_margin if p['symbol'].endswith('EUR')]
-        margin_usdt = [p['symbol'] for p in all_margin if p['symbol'].endswith('USDT')]
-    except Exception as e:
-        print(f"⚠️ Could not fetch margin symbols: {e}")
-        margin_eur = ["BTCEUR", "ETHEUR", "XRPEUR", "BNBEUR", "ADAEUR", "LTCEUR", "LINKEUR"]
-        margin_usdt = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT", "DOGEUSDT", "LTCUSDT", "LINKUSDT"]
-    return margin_eur, margin_usdt
-
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50
@@ -367,7 +353,7 @@ def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stat
     except Exception as e:
         print(f"❌ ERROR sending email: {e}")
 
-def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason, consecutive_holds, margin_eur_symbols=[], margin_usdt_symbols=[]):
+def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason, consecutive_holds):
     ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     eur_available = portfolio.get("EUR", 0)
     win_rate, total_trades = calculate_win_rate(trade_history)
@@ -420,38 +406,27 @@ STRATEGY: CONSERVATIVE MODE (portfolio lost 30%+ from baseline)
         strategy_instructions = f"""
 STRATEGY: AGGRESSIVE MODE — Target 20% monthly growth
 
-STANDARD BUY CRITERIA (all must be met):
-- RSI_1h < 25 (oversold)
-- MACD_histogram > 0.05 (bullish momentum)
-- volume_trend > 1.3
+STANDARD BUY CRITERIA:
+- RSI_1h < 25 (oversold) OR strong momentum (RSI any level with MACD_histogram > 0.3 and volume_trend > 2.0)
 - Price above MA7
 - Maximum 30% of portfolio per trade
+- Requires EUR balance
 
 STANDARD SELL CRITERIA (all must be met):
-- RSI_1h > 75 (overbought)
-- MACD_histogram < -0.05 (bearish momentum)
-- volume_trend > 1.3
+- RSI_1h > 75 AND MACD_histogram < -0.05 AND volume_trend > 1.3
 
-SHORT TRADING (margin — does NOT require EUR):
-- ONLY short symbols from SHORTABLE EUR SYMBOLS or SHORTABLE USDT SYMBOLS lists
-- Prefer EUR pairs — use USDT pairs only if EUR version not available
+SHORT TRADING (margin — executed in USDT, does NOT require EUR):
+- Suggest any coin name — system will automatically use USDT pair
 - Execute SHORT when EITHER condition is met:
-  * CONDITION A: RSI_1h > 78 AND volume_trend > 1.5 → confidence 7/10 → EXECUTE
-  * CONDITION B: RSI_1h > 82 → confidence 8/10 → EXECUTE IMMEDIATELY, no other criteria needed
-- XRPEUR RSI=82.39 RIGHT NOW meets CONDITION B → SHORT with confidence 8/10
-- Do NOT check volume or MACD when RSI > 82 — it is sufficient alone
+  * CONDITION A: RSI_1h > 78 AND volume_trend > 1.5
+  * CONDITION B: RSI_1h > 82 (extreme overbought — no other criteria needed)
 - Stop-loss MANDATORY at +2% above entry
 - Maximum 15% of portfolio
-- SHORT does NOT require EUR balance — execute independently
-- When SHORT criteria are met with confidence >= 7, EXECUTE — do not hesitate
-- MACD direction is irrelevant for SHORT decisions
+- When criteria met with confidence >= 7, EXECUTE immediately
 
-MARGIN BUY (does NOT require full EUR balance):
-- ONLY use symbols from SHORTABLE EUR SYMBOLS or SHORTABLE USDT SYMBOLS lists
-- RSI_1h < 22
-- MACD_histogram > 0.08
-- volume_trend > 1.5
-- Price above MA7 AND MA25
+MARGIN BUY (executed in USDT, does NOT require EUR):
+- Suggest any coin name — system will automatically use USDT pair
+- RSI_1h < 22 AND MACD_histogram > 0.08 AND volume_trend > 1.5
 - Stop-loss at -2%
 - Maximum 15% of portfolio
 {hold_warning}"""
@@ -471,14 +446,8 @@ PORTFOLIO (Available EUR: €{eur_available:.2f}):
 SELLABLE POSITIONS (can be sold for EUR):
 {chr(10).join(sellable_positions) if sellable_positions else 'None'}
 
-BUYABLE SYMBOLS (spot trading):
+BUYABLE EUR SYMBOLS (spot trading with EUR):
 {', '.join(buyable_symbols)}
-
-SHORTABLE EUR SYMBOLS (margin supported, prefer these):
-{', '.join(margin_eur_symbols) if margin_eur_symbols else 'None available'}
-
-SHORTABLE USDT SYMBOLS (use if EUR version not available):
-{', '.join(margin_usdt_symbols[:20]) if margin_usdt_symbols else 'None available'}
 
 MARKET DATA:
 {json.dumps({s: {k: v for k, v in d.items() if k not in ['BB_upper', 'BB_lower', 'MA99', 'MACD_signal']} for s, d in market_data.items()}, indent=2)}
@@ -492,10 +461,8 @@ RECENT TRADES:
 {strategy_instructions}
 
 STRICT RULES:
-- SELL: must be in SELLABLE POSITIONS
-- BUY: use any BUYABLE SYMBOL, requires EUR
-- SHORT/MARGIN_BUY: ONLY from SHORTABLE lists, does NOT require EUR
-- Always use full symbol names (e.g. BTCEUR, BTCUSDT)
+- BUY/SELL: use EUR symbols (e.g. BTCEUR), requires EUR balance
+- SHORT/MARGIN_BUY: just use coin name or any format — system converts to USDT automatically
 - Minimum trade: €{MIN_TRADE_EUR}
 - If BUY but insufficient EUR: add SELL first to generate EUR
 - SELL orders before BUY orders
@@ -505,7 +472,7 @@ STRICT RULES:
 Respond ONLY with JSON array, no explanation:
 [
   {{"action": "BUY", "symbol": "BTCEUR", "amount_eur": 50.00, "reason": "...", "confidence": 8}},
-  {{"action": "SHORT", "symbol": "XRPEUR", "amount_eur": 30.00, "stop_loss_pct": 2.0, "reason": "...", "confidence": 8}}
+  {{"action": "SHORT", "symbol": "XRPUSDT", "amount_eur": 30.00, "stop_loss_pct": 2.0, "reason": "...", "confidence": 8}}
 ]"""
 
     message = ai_client.messages.create(
@@ -535,6 +502,7 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
     shorts = [d for d in decisions if d.get("action") == "SHORT" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     margin_buys = [d for d in decisions if d.get("action") == "MARGIN_BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
 
+    # Execute SELLs
     for decision in sells:
         symbol = decision.get("symbol")
         if symbol and not symbol.endswith("EUR"):
@@ -550,7 +518,7 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         if amount_eur < MIN_TRADE_EUR:
             print(f"⚠️ SELL {symbol}: below minimum — skipping")
             continue
-        coin = symbol.replace("EUR", "").replace("USDT", "")
+        coin = symbol.replace("EUR", "")
         coin_value = portfolio.get(coin, 0) * market_data.get(symbol, {}).get("current_price", 0)
         if coin_value < MIN_TRADE_EUR:
             print(f"⚠️ SELL {symbol}: position too small — skipping")
@@ -583,6 +551,7 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
     portfolio = get_portfolio(client)
     eur_available = portfolio.get("EUR", 0)
 
+    # Execute BUYs
     for decision in buys:
         symbol = decision.get("symbol")
         if symbol and not symbol.endswith("EUR"):
@@ -623,41 +592,14 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         except Exception as e:
             print(f"❌ ERROR BUY {symbol}: {e}")
 
+    # Execute SHORTs — always in USDT
     for decision in shorts:
-        symbol = decision.get("symbol")
-        if not symbol:
+        symbol = decision.get("symbol", "")
+        # Force USDT regardless of what Claude suggested
+        coin = symbol.replace("EUR", "").replace("USDT", "").replace("BTC", "") if symbol else ""
+        if not coin:
             continue
-
-        # Auto-fix symbol suffix
-        if not symbol.endswith("EUR") and not symbol.endswith("USDT"):
-            symbol = f"{symbol}EUR"
-            decision["symbol"] = symbol
-
-        coin = symbol.replace("EUR", "").replace("USDT", "")
-
-        # Validate margin support — try EUR first, fallback to USDT
-        margin_valid = False
-        try:
-            client.get_margin_asset(asset=coin)
-            margin_valid = True
-        except:
-            pass
-
-        if not margin_valid:
-            if symbol.endswith("EUR"):
-                usdt_symbol = f"{coin}USDT"
-                try:
-                    client.get_margin_asset(asset=coin)
-                    symbol = usdt_symbol
-                    decision["symbol"] = symbol
-                    margin_valid = True
-                    print(f"⚠️ {coin}EUR not margin-supported — using {usdt_symbol}")
-                except:
-                    pass
-
-        if not margin_valid:
-            print(f"⚠️ SHORT {symbol}: not a valid margin asset — skipping")
-            continue
+        symbol = f"{coin}USDT"
 
         amount_eur = decision.get("amount_eur")
         stop_loss_pct = decision.get("stop_loss_pct", 2.0)
@@ -690,20 +632,14 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         except Exception as e:
             print(f"❌ ERROR SHORT {symbol}: {e}")
 
+    # Execute MARGIN BUYs — always in USDT
     for decision in margin_buys:
-        symbol = decision.get("symbol")
-        if not symbol:
+        symbol = decision.get("symbol", "")
+        # Force USDT regardless of what Claude suggested
+        coin = symbol.replace("EUR", "").replace("USDT", "").replace("BTC", "") if symbol else ""
+        if not coin:
             continue
-        if not symbol.endswith("EUR") and not symbol.endswith("USDT"):
-            symbol = f"{symbol}EUR"
-            decision["symbol"] = symbol
-
-        try:
-            coin = symbol.replace("EUR", "").replace("USDT", "")
-            client.get_margin_asset(asset=coin)
-        except:
-            print(f"⚠️ MARGIN_BUY {symbol}: not a valid margin asset — skipping")
-            continue
+        symbol = f"{coin}USDT"
 
         amount_eur = decision.get("amount_eur")
         stop_loss_pct = decision.get("stop_loss_pct", 2.0)
@@ -753,12 +689,6 @@ def main():
     last_report_date = daily_stats.get("last_report_date", "")
     errors_today = daily_stats.get("errors_today", 0)
     consecutive_holds = 0
-
-    # Get valid margin symbols once at startup
-    print("📊 Loading margin symbols...")
-    margin_eur_symbols, margin_usdt_symbols = get_margin_symbols(binance_client)
-    print(f"   EUR margin pairs: {len(margin_eur_symbols)}")
-    print(f"   USDT margin pairs: {len(margin_usdt_symbols)}")
 
     while True:
         try:
@@ -814,8 +744,7 @@ def main():
 
             decisions = ask_claude(
                 portfolio, market_data, portfolio_value, baseline_value,
-                news, trade_history, strategy, strategy_reason,
-                consecutive_holds, margin_eur_symbols, margin_usdt_symbols
+                news, trade_history, strategy, strategy_reason, consecutive_holds
             )
 
             print(f"🧠 Claude suggested {len(decisions)} decision(s):")
