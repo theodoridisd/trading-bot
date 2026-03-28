@@ -486,6 +486,13 @@ STRATEGY: AGGRESSIVE MODE
 - If NO standard entry criteria are met → return HOLD, do NOT force trades
 - Maximum 30% of portfolio per trade
 
+IMPORTANT ABOUT SHORT TRADES:
+- SHORT trades use margin borrowing — they do NOT require available EUR
+- You can execute a SHORT even when EUR = €0
+- The margin account borrows the asset, sells it, and profits when price drops
+- Maximum loss per SHORT is limited by the mandatory +2% stop-loss
+- When market shows overbought conditions (RSI > 78, volume > 1.5), EXECUTE THE SHORT — do not hesitate
+
 MARGIN & SHORT TRADING (extra strict criteria):
 - SHORT is allowed in TWO scenarios:
 
@@ -509,6 +516,7 @@ SCENARIO B — Bearish continuation SHORT:
 - When RSI > 80 AND volume_trend > 1.5 → this is a HIGH PROBABILITY SHORT setup — ACT ON IT
 - Do NOT wait for MACD to turn negative — overbought RSI with high volume IS the signal
 - SHORT profits from downtrends — use it aggressively in overbought conditions
+- SHORT trades do not consume EUR — execute them independently of EUR balance
 
 - MARGIN BUY is allowed ONLY when ALL of these are met:
   * RSI_1h < 22 (strongly oversold)
