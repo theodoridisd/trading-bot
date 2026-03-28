@@ -486,37 +486,16 @@ STRATEGY: AGGRESSIVE MODE
 - If NO standard entry criteria are met → return HOLD, do NOT force trades
 - Maximum 30% of portfolio per trade
 
-IMPORTANT ABOUT SHORT TRADES:
-- SHORT trades use margin borrowing — they do NOT require available EUR
-- You can execute a SHORT even when EUR = €0
-- The margin account borrows the asset, sells it, and profits when price drops
-- Maximum loss per SHORT is limited by the mandatory +2% stop-loss
-- When market shows overbought conditions (RSI > 78, volume > 1.5), EXECUTE THE SHORT — do not hesitate
-
-MARGIN & SHORT TRADING (extra strict criteria):
-- SHORT is allowed in TWO scenarios:
-
-SCENARIO A — Overbought reversal SHORT (use this when market is extended):
-  * RSI_1h > 75 (strongly overbought — exhaustion signal)
-  * volume_trend > 1.5 (high volume confirms exhaustion)
-  * Price above MA7 (extended — ready for reversal)
-  * MACD histogram does NOT need to be negative — RSI > 78 with high volume is sufficient confirmation
-  * If RSI > 80 with volume_trend > 2.0 → confidence should be 8/10 minimum → EXECUTE SHORT
-  * Stop-loss MANDATORY at +2% above entry
-  * Maximum position size: 15% of portfolio
-
-SCENARIO B — Bearish continuation SHORT:
-  * RSI_1h < 45 (bearish territory)
-  * MACD histogram < -0.05 (confirmed bearish momentum)
-  * volume_trend > 1.0 (sufficient volume)
-  * Price below MA7 AND MA25 (confirmed downtrend)
-  * Stop-loss MANDATORY at +2% above entry
-  * Maximum position size: 15% of portfolio
-
-- When RSI > 80 AND volume_trend > 1.5 → this is a HIGH PROBABILITY SHORT setup — ACT ON IT
-- Do NOT wait for MACD to turn negative — overbought RSI with high volume IS the signal
-- SHORT profits from downtrends — use it aggressively in overbought conditions
-- SHORT trades do not consume EUR — execute them independently of EUR balance
+MARGIN & SHORT TRADING:
+- SHORT is allowed when ANY of these conditions is met:
+  * RSI_1h > 78 AND volume_trend > 1.5 (overbought with high volume)
+  * RSI_1h > 82 (extreme overbought — reversal highly probable)
+- Stop-loss MANDATORY at +2% above entry price
+- Maximum position size: 15% of portfolio
+- SHORT does NOT require EUR — execute independently of EUR balance
+- Do NOT require negative MACD for SHORT — RSI extremes are sufficient confirmation
+- When conditions are met, confidence should be 7-8/10 — EXECUTE, do not hesitate
+- HOLD is NOT acceptable when SHORT criteria are clearly met
 
 - MARGIN BUY is allowed ONLY when ALL of these are met:
   * RSI_1h < 22 (strongly oversold)
