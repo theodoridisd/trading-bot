@@ -100,6 +100,17 @@ def get_top_eur_symbols(client, limit=10):
         print(f"⚠️ Could not fetch top symbols: {e}")
         return ["BTCEUR", "ETHEUR", "XRPEUR"]
 
+def get_margin_eur_symbols(client):
+    """Gets EUR symbols that support margin trading"""
+    try:
+        margin_assets = client.get_margin_all_pairs()
+        margin_symbols = {p['symbol'] for p in margin_assets}
+        return [s for s in margin_symbols if s.endswith('EUR')]
+    except Exception as e:
+        print(f"⚠️ Could not fetch margin symbols: {e}")
+        # Fallback to known margin-supported EUR pairs
+        return ["BTCEUR", "ETHEUR", "XRPEUR", "BNBEUR", "SONEUR", "ADAEUR", "LTCEUR", "LINKEUR"]
+
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50
@@ -505,6 +516,12 @@ Respond ONLY with JSON array, no explanation:
 
 def execute_trades(client, decisions, portfolio, portfolio_value, market_data, trade_history):
     for d in decisions:
+                # Check if symbol supports margin trading
+        try:
+            client.get_margin_asset(asset=symbol.replace("EUR", ""))
+        except:
+            print(f"⚠️ SHORT {symbol}: not a valid margin asset — skipping")
+            continue
         if "confidence" not in d:
             d["confidence"] = 0
 
