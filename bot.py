@@ -492,14 +492,27 @@ STRATEGY: AGGRESSIVE MODE
 - Maximum 30% of portfolio per trade
 
 MARGIN & SHORT TRADING (extra strict criteria):
-- SHORT is allowed ONLY when ALL of these are met:
-  * RSI_1h < 45 (bearish territory — market showing weakness)
-  * MACD histogram < -0.05 (confirmed bearish momentum)
-  * volume_trend > 1.0 (sufficient volume confirmation)
-  * Price below MA7 AND MA25 (confirmed downtrend structure)
-  * Stop-loss MANDATORY at +2% above entry (tight)
+- SHORT is allowed in TWO scenarios:
+
+SCENARIO A — Overbought reversal SHORT:
+  * RSI_1h > 75 (strongly overbought — exhaustion signal)
+  * MACD histogram turning negative or < 0.05 (momentum fading)
+  * volume_trend > 1.5 (high volume at top confirms exhaustion)
+  * Price above MA7 (already extended — ready for reversal)
+  * Stop-loss MANDATORY at +2% above entry
   * Maximum position size: 15% of portfolio
-- SHORT is the PREFERRED action in bearish markets — use it to profit from downtrends instead of HOLDing
+
+SCENARIO B — Bearish continuation SHORT:
+  * RSI_1h < 45 (bearish territory)
+  * MACD histogram < -0.05 (confirmed bearish momentum)
+  * volume_trend > 1.0 (sufficient volume)
+  * Price below MA7 AND MA25 (confirmed downtrend)
+  * Stop-loss MANDATORY at +2% above entry
+  * Maximum position size: 15% of portfolio
+
+- SHORT is the PREFERRED action when market shows clear directional bias
+- Do NOT wait for perfect conditions — act on high probability setups
+
 - MARGIN BUY is allowed ONLY when ALL of these are met:
   * RSI_1h < 22 (strongly oversold)
   * MACD histogram > 0.08 (confirmed bullish momentum)
