@@ -97,6 +97,17 @@ def get_top_eur_symbols(client, limit=10):
         print(f"⚠️ Could not fetch top symbols: {e}")
         return ["BTCEUR", "ETHEUR", "XRPEUR"]
 
+def get_valid_margin_assets(client):
+    """Gets list of valid borrowable margin assets from Binance"""
+    try:
+        assets = client.get_margin_all_assets()
+        valid = [a['assetName'] for a in assets if a.get('isBorrowable', False)]
+        print(f"📊 Valid margin assets ({len(valid)}): {valid[:15]}...")
+        return valid
+    except Exception as e:
+        print(f"⚠️ Could not fetch margin assets: {e}")
+        return ["BTC", "ETH", "BNB", "SOL", "ADA", "LINK", "LTC", "MATIC", "DOT", "AVAX"]
+
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50
@@ -353,7 +364,7 @@ def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stat
     except Exception as e:
         print(f"❌ ERROR sending email: {e}")
 
-def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason, consecutive_holds):
+def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason, consecutive_holds, valid_margin_assets):
     ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     eur_available = portfolio.get("EUR", 0)
     win_rate, total_trades = calculate_win_rate(trade_history)
@@ -407,7 +418,7 @@ STRATEGY: CONSERVATIVE MODE (portfolio lost 30%+ from baseline)
 STRATEGY: AGGRESSIVE MODE — Target 20% monthly growth
 
 STANDARD BUY CRITERIA:
-- RSI_1h < 25 (oversold) OR strong momentum (RSI any level with MACD_histogram > 0.3 and volume_trend > 2.0)
+- RSI_1h < 25 (oversold) OR strong momentum (MACD_histogram > 0.3 AND volume_trend > 2.0)
 - Price above MA7
 - Maximum 30% of portfolio per trade
 - Requires EUR balance
@@ -416,7 +427,8 @@ STANDARD SELL CRITERIA (all must be met):
 - RSI_1h > 75 AND MACD_histogram < -0.05 AND volume_trend > 1.3
 
 SHORT TRADING (margin — executed in USDT, does NOT require EUR):
-- Suggest any coin name — system will automatically use USDT pair
+- ONLY short coins from this list: {', '.join(valid_margin_assets[:20])}
+- Suggest the coin name — system automatically uses USDT pair
 - Execute SHORT when EITHER condition is met:
   * CONDITION A: RSI_1h > 78 AND volume_trend > 1.5
   * CONDITION B: RSI_1h > 82 (extreme overbought — no other criteria needed)
@@ -425,7 +437,7 @@ SHORT TRADING (margin — executed in USDT, does NOT require EUR):
 - When criteria met with confidence >= 7, EXECUTE immediately
 
 MARGIN BUY (executed in USDT, does NOT require EUR):
-- Suggest any coin name — system will automatically use USDT pair
+- ONLY margin buy coins from this list: {', '.join(valid_margin_assets[:20])}
 - RSI_1h < 22 AND MACD_histogram > 0.08 AND volume_trend > 1.5
 - Stop-loss at -2%
 - Maximum 15% of portfolio
@@ -462,7 +474,7 @@ RECENT TRADES:
 
 STRICT RULES:
 - BUY/SELL: use EUR symbols (e.g. BTCEUR), requires EUR balance
-- SHORT/MARGIN_BUY: just use coin name or any format — system converts to USDT automatically
+- SHORT/MARGIN_BUY: only coins from valid margin list, system converts to USDT automatically
 - Minimum trade: €{MIN_TRADE_EUR}
 - If BUY but insufficient EUR: add SELL first to generate EUR
 - SELL orders before BUY orders
@@ -472,7 +484,7 @@ STRICT RULES:
 Respond ONLY with JSON array, no explanation:
 [
   {{"action": "BUY", "symbol": "BTCEUR", "amount_eur": 50.00, "reason": "...", "confidence": 8}},
-  {{"action": "SHORT", "symbol": "XRPUSDT", "amount_eur": 30.00, "stop_loss_pct": 2.0, "reason": "...", "confidence": 8}}
+  {{"action": "SHORT", "symbol": "ETH", "amount_eur": 30.00, "stop_loss_pct": 2.0, "reason": "...", "confidence": 8}}
 ]"""
 
     message = ai_client.messages.create(
@@ -492,7 +504,7 @@ Respond ONLY with JSON array, no explanation:
         return [json.loads(match_obj.group())]
     raise ValueError("No JSON array found in response")
 
-def execute_trades(client, decisions, portfolio, portfolio_value, market_data, trade_history):
+def execute_trades(client, decisions, portfolio, portfolio_value, market_data, trade_history, valid_margin_assets):
     for d in decisions:
         if "confidence" not in d:
             d["confidence"] = 0
@@ -592,15 +604,20 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         except Exception as e:
             print(f"❌ ERROR BUY {symbol}: {e}")
 
-    # Execute SHORTs — always in USDT
+    # Execute SHORTs — always in USDT, only valid margin assets
     for decision in shorts:
         symbol = decision.get("symbol", "")
-        # Force USDT regardless of what Claude suggested
-        coin = symbol.replace("EUR", "").replace("USDT", "").replace("BTC", "") if symbol else ""
+        # Extract coin name and force USDT
+        coin = symbol.replace("EUR", "").replace("USDT", "").strip()
         if not coin:
             continue
-        symbol = f"{coin}USDT"
 
+        # Check if coin is in valid margin assets
+        if coin not in valid_margin_assets:
+            print(f"⚠️ SHORT {coin}: not in valid margin assets list — skipping")
+            continue
+
+        symbol = f"{coin}USDT"
         amount_eur = decision.get("amount_eur")
         stop_loss_pct = decision.get("stop_loss_pct", 2.0)
         if not amount_eur:
@@ -632,15 +649,18 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         except Exception as e:
             print(f"❌ ERROR SHORT {symbol}: {e}")
 
-    # Execute MARGIN BUYs — always in USDT
+    # Execute MARGIN BUYs — always in USDT, only valid margin assets
     for decision in margin_buys:
         symbol = decision.get("symbol", "")
-        # Force USDT regardless of what Claude suggested
-        coin = symbol.replace("EUR", "").replace("USDT", "").replace("BTC", "") if symbol else ""
+        coin = symbol.replace("EUR", "").replace("USDT", "").strip()
         if not coin:
             continue
-        symbol = f"{coin}USDT"
 
+        if coin not in valid_margin_assets:
+            print(f"⚠️ MARGIN_BUY {coin}: not in valid margin assets list — skipping")
+            continue
+
+        symbol = f"{coin}USDT"
         amount_eur = decision.get("amount_eur")
         stop_loss_pct = decision.get("stop_loss_pct", 2.0)
         if not amount_eur:
@@ -682,6 +702,7 @@ def main():
 
     binance_client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
+    # Load persistent data
     trade_history = load_from_github(TRADE_HISTORY_FILE) or load_json_file(TRADE_HISTORY_FILE, [])
     portfolio_baseline = load_from_github(PORTFOLIO_BASELINE_FILE) or load_json_file(PORTFOLIO_BASELINE_FILE, {})
     daily_stats = load_from_github(DAILY_STATS_FILE) or load_json_file(DAILY_STATS_FILE, {})
@@ -689,6 +710,9 @@ def main():
     last_report_date = daily_stats.get("last_report_date", "")
     errors_today = daily_stats.get("errors_today", 0)
     consecutive_holds = 0
+
+    # Get valid margin assets once at startup
+    valid_margin_assets = get_valid_margin_assets(binance_client)
 
     while True:
         try:
@@ -744,7 +768,8 @@ def main():
 
             decisions = ask_claude(
                 portfolio, market_data, portfolio_value, baseline_value,
-                news, trade_history, strategy, strategy_reason, consecutive_holds
+                news, trade_history, strategy, strategy_reason,
+                consecutive_holds, valid_margin_assets
             )
 
             print(f"🧠 Claude suggested {len(decisions)} decision(s):")
@@ -757,7 +782,11 @@ def main():
             else:
                 consecutive_holds = 0
 
-            trade_history = execute_trades(binance_client, decisions, portfolio, portfolio_value, market_data, trade_history)
+            trade_history = execute_trades(
+                binance_client, decisions, portfolio, portfolio_value,
+                market_data, trade_history, valid_margin_assets
+            )
+
             save_json_file(TRADE_HISTORY_FILE, trade_history)
             save_to_github(TRADE_HISTORY_FILE, trade_history)
             save_to_github(PORTFOLIO_BASELINE_FILE, portfolio_baseline)
