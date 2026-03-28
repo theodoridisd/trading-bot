@@ -273,13 +273,8 @@ def determine_strategy(trade_history, portfolio_value, baseline_value):
     return "AGGRESSIVE", "Not enough trade history yet — using aggressive strategy"
 
 def count_consecutive_holds(trade_history):
-    count = 0
-    for trade in reversed(trade_history):
-        if trade.get("action") == "HOLD":
-            count += 1
-        else:
-            break
-    return count
+    """Count HOLDs in current session only - not stored in history"""
+    return 0  # HOLDs no longer stored in history
 
 def update_trade_profits(trade_history, market_data):
     for trade in trade_history:
@@ -863,15 +858,6 @@ def main():
             for d in decisions:
                 print(f"   → {d['action']} | {d.get('symbol', '-')} | €{d.get('amount_eur', 0):.2f} | Confidence: {d.get('confidence', 0)}/10")
                 print(f"     Reason: {d['reason']}")
-
-            # Track HOLDs in history
-            for d in decisions:
-                if d.get("action") == "HOLD":
-                    trade_history.append({
-                        "time": str(datetime.now()),
-                        "action": "HOLD",
-                        "reason": d.get("reason", "")
-                    })
 
             trade_history = execute_trades(binance_client, decisions, portfolio, portfolio_value, market_data, trade_history)
             save_json_file(TRADE_HISTORY_FILE, trade_history)
