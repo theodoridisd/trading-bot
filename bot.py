@@ -627,29 +627,37 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         symbol = decision.get("symbol")
         if not symbol:
             continue
+
         # Auto-fix symbol suffix
         if not symbol.endswith("EUR") and not symbol.endswith("USDT"):
             symbol = f"{symbol}EUR"
             decision["symbol"] = symbol
 
-        # Validate margin support — try EUR first, fallback to USDT
         coin = symbol.replace("EUR", "").replace("USDT", "")
+
+        # Validate margin support — try EUR first, fallback to USDT
+        margin_valid = False
         try:
             client.get_margin_asset(asset=coin)
+            margin_valid = True
         except:
-            # Try USDT version if EUR not supported
+            pass
+
+        if not margin_valid:
             if symbol.endswith("EUR"):
                 usdt_symbol = f"{coin}USDT"
                 try:
                     client.get_margin_asset(asset=coin)
                     symbol = usdt_symbol
+                    decision["symbol"] = symbol
+                    margin_valid = True
                     print(f"⚠️ {coin}EUR not margin-supported — using {usdt_symbol}")
                 except:
-                    print(f"⚠️ SHORT {symbol}: not a valid margin asset — skipping")
-                    continue
-            else:
-                print(f"⚠️ SHORT {symbol}: not a valid margin asset — skipping")
-                continue
+                    pass
+
+        if not margin_valid:
+            print(f"⚠️ SHORT {symbol}: not a valid margin asset — skipping")
+            continue
 
         amount_eur = decision.get("amount_eur")
         stop_loss_pct = decision.get("stop_loss_pct", 2.0)
