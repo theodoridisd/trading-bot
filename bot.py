@@ -489,11 +489,12 @@ STRATEGY: AGGRESSIVE MODE
 MARGIN & SHORT TRADING (extra strict criteria):
 - SHORT is allowed in TWO scenarios:
 
-SCENARIO A — Overbought reversal SHORT:
+SCENARIO A — Overbought reversal SHORT (use this when market is extended):
   * RSI_1h > 75 (strongly overbought — exhaustion signal)
-  * MACD histogram turning negative or < 0.05 (momentum fading)
-  * volume_trend > 1.5 (high volume at top confirms exhaustion)
-  * Price above MA7 (already extended — ready for reversal)
+  * volume_trend > 1.5 (high volume confirms exhaustion)
+  * Price above MA7 (extended — ready for reversal)
+  * MACD histogram does NOT need to be negative — RSI > 78 with high volume is sufficient confirmation
+  * If RSI > 80 with volume_trend > 2.0 → confidence should be 8/10 minimum → EXECUTE SHORT
   * Stop-loss MANDATORY at +2% above entry
   * Maximum position size: 15% of portfolio
 
@@ -505,8 +506,9 @@ SCENARIO B — Bearish continuation SHORT:
   * Stop-loss MANDATORY at +2% above entry
   * Maximum position size: 15% of portfolio
 
-- SHORT is the PREFERRED action when market shows clear directional bias
-- Do NOT wait for perfect conditions — act on high probability setups
+- When RSI > 80 AND volume_trend > 1.5 → this is a HIGH PROBABILITY SHORT setup — ACT ON IT
+- Do NOT wait for MACD to turn negative — overbought RSI with high volume IS the signal
+- SHORT profits from downtrends — use it aggressively in overbought conditions
 
 - MARGIN BUY is allowed ONLY when ALL of these are met:
   * RSI_1h < 22 (strongly oversold)
