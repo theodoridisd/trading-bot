@@ -402,9 +402,8 @@ Relax entry criteria for NEW trades using available EUR only:
 - Do NOT sell existing positions just to fund an override trade
 - Only use available EUR (€{eur_available:.2f})
 - Minimum confidence: 6/10
-- After {consecutive_holds} HOLDs, trading is MANDATORY if ANY asset reaches 6/10 confidence
-- SUIEUR at 6/10 confidence with volume_trend=2.02 MUST be traded — deploy available EUR now
-- Do NOT return HOLD if any asset meets minimum 6/10 threshold"""
+- After {consecutive_holds} HOLDs, HOLD is only acceptable if NO asset reaches 6/10 confidence
+- If ANY asset reaches 6/10+ confidence, EXECUTE the trade regardless of EUR amount available"""
 
     if strategy == "CONSERVATIVE":
         strategy_instructions = """
@@ -478,6 +477,8 @@ STRICT RULES:
 - BUY/SELL: use EUR symbols (e.g. BTCEUR), requires EUR balance
 - SHORT/MARGIN_BUY: only coins from valid margin list, system converts to USDT automatically
 - Minimum trade: €{MIN_TRADE_EUR}
+- Any EUR amount above €{MIN_TRADE_EUR} is sufficient for a valid trade — never use capital size as a reason to HOLD
+- A 20% portfolio allocation is perfectly acceptable — do not require large amounts to trade
 - If BUY but insufficient EUR: add SELL first to generate EUR
 - SELL orders before BUY orders
 - Always include confidence (1-10)
