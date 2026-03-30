@@ -402,7 +402,9 @@ Relax entry criteria for NEW trades using available EUR only:
 - Do NOT sell existing positions just to fund an override trade
 - Only use available EUR (€{eur_available:.2f})
 - Minimum confidence: 6/10
-- HOLD still acceptable if truly no opportunity exists"""
+- After {consecutive_holds} HOLDs, trading is MANDATORY if ANY asset reaches 6/10 confidence
+- SUIEUR at 6/10 confidence with volume_trend=2.02 MUST be traded — deploy available EUR now
+- Do NOT return HOLD if any asset meets minimum 6/10 threshold"""
 
     if strategy == "CONSERVATIVE":
         strategy_instructions = """
