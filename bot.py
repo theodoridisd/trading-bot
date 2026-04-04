@@ -97,17 +97,6 @@ def get_top_eur_symbols(client, limit=10):
         print(f"⚠️ Could not fetch top symbols: {e}")
         return ["BTCEUR", "ETHEUR", "XRPEUR"]
 
-def get_valid_margin_assets(client):
-    """Gets list of valid borrowable margin assets from Binance"""
-    try:
-        assets = client.get_margin_all_assets()
-        valid = [a['assetName'] for a in assets if a.get('isBorrowable', False)]
-        print(f"📊 Valid margin assets ({len(valid)}): {valid[:15]}...")
-        return valid
-    except Exception as e:
-        print(f"⚠️ Could not fetch margin assets: {e}")
-        return ["BTC", "ETH", "BNB", "SOL", "ADA", "LINK", "LTC", "MATIC", "DOT", "AVAX"]
-
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50
@@ -308,8 +297,6 @@ def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stat
         today_trades = [t for t in trade_history if t.get("time", "").startswith(today)]
         buys = [t for t in today_trades if t.get("action") == "BUY"]
         sells = [t for t in today_trades if t.get("action") == "SELL"]
-        shorts = [t for t in today_trades if t.get("action") == "SHORT"]
-        margin_buys = [t for t in today_trades if t.get("action") == "MARGIN_BUY"]
         closed_today = [t for t in today_trades if t.get("closed") and t.get("profit_eur") is not None]
         total_pnl = sum(t.get("profit_eur", 0) for t in closed_today)
         wins_today = sum(1 for t in closed_today if t.get("profit_eur", 0) > 0)
@@ -333,8 +320,6 @@ def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stat
 <table border="1" cellpadding="8" cellspacing="0" width="100%">
   <tr><td><strong>BUYs</strong></td><td>{len(buys)}</td></tr>
   <tr><td><strong>SELLs</strong></td><td>{len(sells)}</td></tr>
-  <tr><td><strong>SHORTs</strong></td><td>{len(shorts)}</td></tr>
-  <tr><td><strong>MARGIN BUYs</strong></td><td>{len(margin_buys)}</td></tr>
   <tr><td><strong>Errors</strong></td><td style="color: {'red' if errors_today > 0 else 'green'}">{errors_today}</td></tr>
 </table>
 <h3>💰 Today's PnL</h3>
@@ -364,7 +349,7 @@ def send_daily_report(trade_history, portfolio_value, baseline_value, daily_stat
     except Exception as e:
         print(f"❌ ERROR sending email: {e}")
 
-def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason, consecutive_holds, valid_margin_assets):
+def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, trade_history, strategy, strategy_reason, consecutive_holds):
     ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     eur_available = portfolio.get("EUR", 0)
     win_rate, total_trades = calculate_win_rate(trade_history)
@@ -396,14 +381,11 @@ def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, tr
     if consecutive_holds >= MAX_CONSECUTIVE_HOLDS:
         hold_warning = f"""
 ⚠️ OVERRIDE: {consecutive_holds} consecutive HOLDs detected.
-Relax entry criteria for NEW trades using available EUR only:
-- RSI_1h between 35-65 acceptable with any MACD direction
-- volume_trend > 1.0 sufficient
-- Do NOT sell existing positions just to fund an override trade
-- Only use available EUR (€{eur_available:.2f})
-- Minimum confidence: 6/10
+- Relax entry criteria: RSI 35-65 acceptable, volume_trend > 1.0, MACD any direction
+- Any EUR amount above €{MIN_TRADE_EUR} is sufficient — never use capital size as excuse to HOLD
 - After {consecutive_holds} HOLDs, HOLD is only acceptable if NO asset reaches 6/10 confidence
-- If ANY asset reaches 6/10+ confidence, EXECUTE the trade regardless of EUR amount available"""
+- If ANY asset reaches 6/10+ confidence, EXECUTE the trade immediately
+- Do NOT sell existing positions to fund override trades"""
 
     if strategy == "CONSERVATIVE":
         strategy_instructions = """
@@ -412,39 +394,29 @@ STRATEGY: CONSERVATIVE MODE (portfolio lost 30%+ from baseline)
 - Maximum 15% of portfolio per trade
 - Prefer HOLD
 - Focus on capital preservation
-- Only top 3 volume coins
-- NO margin or short trades"""
+- Only top 3 volume coins"""
     else:
         strategy_instructions = f"""
 STRATEGY: AGGRESSIVE MODE — Target 20% monthly growth
+FOCUS: Spot trading only — BUY and SELL EUR pairs
 
-STANDARD BUY CRITERIA:
+BUY CRITERIA:
 - RSI_1h < 25 (oversold) OR strong momentum (MACD_histogram > 0.3 AND volume_trend > 2.0)
 - Price above MA7
 - Maximum 30% of portfolio per trade
-- Requires EUR balance
+- Any EUR amount above €{MIN_TRADE_EUR} is sufficient for a valid trade
 
-STANDARD SELL CRITERIA (all must be met):
+SELL CRITERIA (all must be met):
 - RSI_1h > 75 AND MACD_histogram < -0.05 AND volume_trend > 1.3
+- OR stop-loss/take-profit triggered automatically
 
-SHORT TRADING (margin — executed in USDT, does NOT require EUR):
-- ONLY short coins from this list: {', '.join(valid_margin_assets[:20])}
-- Suggest the coin name — system automatically uses USDT pair
-- Execute SHORT when EITHER condition is met:
-  * CONDITION A: RSI_1h > 78 AND volume_trend > 1.5
-  * CONDITION B: RSI_1h > 82 (extreme overbought — no other criteria needed)
-- Stop-loss MANDATORY at +2% above entry
-- Maximum 15% of portfolio
-- When criteria met with confidence >= 7, EXECUTE immediately
-
-MARGIN BUY (executed in USDT, does NOT require EUR):
-- ONLY margin buy coins from this list: {', '.join(valid_margin_assets[:20])}
-- RSI_1h < 22 AND MACD_histogram > 0.08 AND volume_trend > 1.5
-- Stop-loss at -2%
-- Maximum 15% of portfolio
+IMPORTANT:
+- Do NOT suggest SHORT or MARGIN_BUY — spot trading only
+- Never use capital size as a reason to HOLD
+- A 20-30% portfolio allocation per trade is perfectly acceptable
 {hold_warning}"""
 
-    prompt = f"""You are an expert crypto trader. Goal: grow portfolio 20% per month.
+    prompt = f"""You are an expert crypto spot trader. Goal: grow portfolio 20% per month through disciplined BUY and SELL trades.
 
 PERFORMANCE:
 - Portfolio: €{portfolio_value:.2f} | Baseline: €{baseline_value:.2f} | Target: €{target_value:.2f}
@@ -456,10 +428,10 @@ PERFORMANCE:
 PORTFOLIO (Available EUR: €{eur_available:.2f}):
 {json.dumps(portfolio_summary, indent=2)}
 
-SELLABLE POSITIONS (can be sold for EUR):
+SELLABLE POSITIONS:
 {chr(10).join(sellable_positions) if sellable_positions else 'None'}
 
-BUYABLE EUR SYMBOLS (spot trading with EUR):
+BUYABLE EUR SYMBOLS:
 {', '.join(buyable_symbols)}
 
 MARKET DATA:
@@ -474,20 +446,19 @@ RECENT TRADES:
 {strategy_instructions}
 
 STRICT RULES:
-- BUY/SELL: use EUR symbols (e.g. BTCEUR), requires EUR balance
-- SHORT/MARGIN_BUY: only coins from valid margin list, system converts to USDT automatically
+- Only BUY and SELL — no shorts or margin trades
+- BUY requires EUR balance, SELL requires holding the coin
+- Always use full EUR symbol names (e.g. BTCEUR, ETHEUR)
 - Minimum trade: €{MIN_TRADE_EUR}
-- Any EUR amount above €{MIN_TRADE_EUR} is sufficient for a valid trade — never use capital size as a reason to HOLD
-- A 20% portfolio allocation is perfectly acceptable — do not require large amounts to trade
 - If BUY but insufficient EUR: add SELL first to generate EUR
-- SELL orders before BUY orders
+- SELL orders before BUY orders in the list
 - Always include confidence (1-10)
 - HOLD only when truly no opportunity exists
 
 Respond ONLY with JSON array, no explanation:
 [
   {{"action": "BUY", "symbol": "BTCEUR", "amount_eur": 50.00, "reason": "...", "confidence": 8}},
-  {{"action": "SHORT", "symbol": "ETH", "amount_eur": 30.00, "stop_loss_pct": 2.0, "reason": "...", "confidence": 8}}
+  {{"action": "SELL", "symbol": "ETHEUR", "amount_eur": 50.00, "reason": "...", "confidence": 8}}
 ]"""
 
     message = ai_client.messages.create(
@@ -507,17 +478,15 @@ Respond ONLY with JSON array, no explanation:
         return [json.loads(match_obj.group())]
     raise ValueError("No JSON array found in response")
 
-def execute_trades(client, decisions, portfolio, portfolio_value, market_data, trade_history, valid_margin_assets):
+def execute_trades(client, decisions, portfolio, portfolio_value, market_data, trade_history):
     for d in decisions:
         if "confidence" not in d:
             d["confidence"] = 0
 
     sells = [d for d in decisions if d.get("action") == "SELL" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     buys = [d for d in decisions if d.get("action") == "BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
-    shorts = [d for d in decisions if d.get("action") == "SHORT" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
-    margin_buys = [d for d in decisions if d.get("action") == "MARGIN_BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
 
-    # Execute SELLs
+    # Execute SELLs first
     for decision in sells:
         symbol = decision.get("symbol")
         if symbol and not symbol.endswith("EUR"):
@@ -607,94 +576,6 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         except Exception as e:
             print(f"❌ ERROR BUY {symbol}: {e}")
 
-    # Execute SHORTs — always in USDT, only valid margin assets
-    for decision in shorts:
-        symbol = decision.get("symbol", "")
-        # Extract coin name and force USDT
-        coin = symbol.replace("EUR", "").replace("USDT", "").strip()
-        if not coin:
-            continue
-
-        # Check if coin is in valid margin assets
-        if coin not in valid_margin_assets:
-            print(f"⚠️ SHORT {coin}: not in valid margin assets list — skipping")
-            continue
-
-        symbol = f"{coin}USDT"
-        amount_eur = decision.get("amount_eur")
-        stop_loss_pct = decision.get("stop_loss_pct", 2.0)
-        if not amount_eur:
-            continue
-        if amount_eur > portfolio_value * 0.15:
-            amount_eur = portfolio_value * 0.15
-            print(f"⚠️ SHORT capped at 15%: €{amount_eur:.2f}")
-        try:
-            client.create_margin_order(
-                symbol=symbol,
-                side="SELL",
-                type="MARKET",
-                quoteOrderQty=round(amount_eur, 2),
-                sideEffectType="MARGIN_BUY"
-            )
-            current_price = market_data.get(symbol, {}).get("current_price", 0)
-            print(f"✅ SHORT {symbol}: €{amount_eur:.2f} | Stop-loss: +{stop_loss_pct}%")
-            trade_history.append({
-                "time": str(datetime.now()),
-                "action": "SHORT",
-                "symbol": symbol,
-                "amount_eur": amount_eur,
-                "entry_price": current_price,
-                "stop_loss_pct": stop_loss_pct,
-                "reason": decision.get("reason", ""),
-                "closed": False,
-                "profit_eur": None
-            })
-        except Exception as e:
-            print(f"❌ ERROR SHORT {symbol}: {e}")
-
-    # Execute MARGIN BUYs — always in USDT, only valid margin assets
-    for decision in margin_buys:
-        symbol = decision.get("symbol", "")
-        coin = symbol.replace("EUR", "").replace("USDT", "").strip()
-        if not coin:
-            continue
-
-        if coin not in valid_margin_assets:
-            print(f"⚠️ MARGIN_BUY {coin}: not in valid margin assets list — skipping")
-            continue
-
-        symbol = f"{coin}USDT"
-        amount_eur = decision.get("amount_eur")
-        stop_loss_pct = decision.get("stop_loss_pct", 2.0)
-        if not amount_eur:
-            continue
-        if amount_eur > portfolio_value * 0.15:
-            amount_eur = portfolio_value * 0.15
-            print(f"⚠️ MARGIN_BUY capped at 15%: €{amount_eur:.2f}")
-        try:
-            client.create_margin_order(
-                symbol=symbol,
-                side="BUY",
-                type="MARKET",
-                quoteOrderQty=round(amount_eur, 2),
-                sideEffectType="MARGIN_BUY"
-            )
-            current_price = market_data.get(symbol, {}).get("current_price", 0)
-            print(f"✅ MARGIN_BUY {symbol}: €{amount_eur:.2f} | Stop-loss: -{stop_loss_pct}%")
-            trade_history.append({
-                "time": str(datetime.now()),
-                "action": "MARGIN_BUY",
-                "symbol": symbol,
-                "amount_eur": amount_eur,
-                "entry_price": current_price,
-                "stop_loss_pct": stop_loss_pct,
-                "reason": decision.get("reason", ""),
-                "closed": False,
-                "profit_eur": None
-            })
-        except Exception as e:
-            print(f"❌ ERROR MARGIN_BUY {symbol}: {e}")
-
     return trade_history
 
 def main():
@@ -705,7 +586,6 @@ def main():
 
     binance_client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
-    # Load persistent data
     trade_history = load_from_github(TRADE_HISTORY_FILE) or load_json_file(TRADE_HISTORY_FILE, [])
     portfolio_baseline = load_from_github(PORTFOLIO_BASELINE_FILE) or load_json_file(PORTFOLIO_BASELINE_FILE, {})
     daily_stats = load_from_github(DAILY_STATS_FILE) or load_json_file(DAILY_STATS_FILE, {})
@@ -713,9 +593,6 @@ def main():
     last_report_date = daily_stats.get("last_report_date", "")
     errors_today = daily_stats.get("errors_today", 0)
     consecutive_holds = 0
-
-    # Get valid margin assets once at startup
-    valid_margin_assets = get_valid_margin_assets(binance_client)
 
     while True:
         try:
@@ -771,8 +648,7 @@ def main():
 
             decisions = ask_claude(
                 portfolio, market_data, portfolio_value, baseline_value,
-                news, trade_history, strategy, strategy_reason,
-                consecutive_holds, valid_margin_assets
+                news, trade_history, strategy, strategy_reason, consecutive_holds
             )
 
             print(f"🧠 Claude suggested {len(decisions)} decision(s):")
@@ -785,11 +661,7 @@ def main():
             else:
                 consecutive_holds = 0
 
-            trade_history = execute_trades(
-                binance_client, decisions, portfolio, portfolio_value,
-                market_data, trade_history, valid_margin_assets
-            )
-
+            trade_history = execute_trades(binance_client, decisions, portfolio, portfolio_value, market_data, trade_history)
             save_json_file(TRADE_HISTORY_FILE, trade_history)
             save_to_github(TRADE_HISTORY_FILE, trade_history)
             save_to_github(PORTFOLIO_BASELINE_FILE, portfolio_baseline)
