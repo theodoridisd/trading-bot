@@ -5,7 +5,7 @@ import json
 import re
 import requests
 from binance.client import Client
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # API Keys
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
@@ -26,6 +26,8 @@ INTERVAL_SECONDS = 3600
 DRAWDOWN_LIMIT = 0.30
 TARGET_GROWTH = 0.20
 MAX_CONSECUTIVE_HOLDS = 6
+MIN_HOLD_HOURS = 4
+MIN_LOSS_TO_SELL = 0.03
 TRADE_HISTORY_FILE = "trade_history.json"
 PORTFOLIO_BASELINE_FILE = "portfolio_baseline.json"
 DAILY_STATS_FILE = "daily_stats.json"
@@ -250,6 +252,18 @@ def update_trade_profits(trade_history, market_data):
                     trade["current_profit_pct"] = round(price_change * 100, 2)
     return trade_history
 
+def get_position_hold_hours(trade_history, symbol):
+    """Returns how many hours a position has been held"""
+    for trade in reversed(trade_history):
+        if trade.get("symbol") == symbol and trade.get("action") == "BUY" and not trade.get("closed"):
+            try:
+                entry_time = datetime.fromisoformat(trade.get("time", ""))
+                hours_held = (datetime.now() - entry_time).total_seconds() / 3600
+                return round(hours_held, 1)
+            except:
+                return 999
+    return 999
+
 def check_stop_loss_and_take_profit(client, portfolio, market_data, trade_history):
     for trade in trade_history:
         if trade.get("action") == "BUY" and trade.get("closed") != True:
@@ -364,13 +378,17 @@ def ask_claude(portfolio, market_data, portfolio_value, baseline_value, news, tr
             symbol = f"{coin}EUR"
             if symbol in market_data:
                 value = amount * market_data[symbol]["current_price"]
+                hours_held = get_position_hold_hours(trade_history, symbol)
                 portfolio_summary[coin] = {
                     "amount": amount,
                     "value_eur": round(value, 2),
-                    "percent_of_portfolio": round((value/portfolio_value)*100, 1)
+                    "percent_of_portfolio": round((value/portfolio_value)*100, 1),
+                    "hours_held": hours_held
                 }
                 if value >= MIN_TRADE_EUR:
-                    sellable_positions.append(f"{coin} (€{value:.2f}) → symbol: {symbol}")
+                    sellable_positions.append(
+                        f"{coin} (€{value:.2f}, held {hours_held}h) → symbol: {symbol}"
+                    )
 
     recent_history = trade_history[-10:] if trade_history else []
     news_text = "\n".join([f"- {n}" for n in news]) if news else "No news available"
@@ -406,17 +424,20 @@ BUY CRITERIA:
 - Maximum 30% of portfolio per trade
 - Any EUR amount above €{MIN_TRADE_EUR} is sufficient for a valid trade
 
-SELL CRITERIA (all must be met):
-- RSI_1h > 75 AND MACD_histogram < -0.05 AND volume_trend > 1.3
-- OR stop-loss/take-profit triggered automatically
+SELL CRITERIA — ALL of these must be true to sell a position:
+1. Position has been held for at least {MIN_HOLD_HOURS} hours (check hours_held in portfolio)
+2. Loss exceeds {MIN_LOSS_TO_SELL*100:.0f}% OR RSI_1h > 75 with MACD_histogram < -0.05 and volume_trend > 1.3
+3. Do NOT sell positions with loss < {MIN_LOSS_TO_SELL*100:.0f}% — let stop-loss handle small losses automatically
+4. Do NOT sell a position just held for 1-2 hours with -0.21% or -1.73% loss — this is normal volatility
 
-IMPORTANT:
+IMPORTANT RULES:
+- Stop-loss at {STOP_LOSS_PERCENT*100:.0f}% and take-profit at {TAKE_PROFIT_PERCENT*100:.0f}% are handled automatically — do NOT manually sell before these trigger
+- Only suggest SELL if position has been held {MIN_HOLD_HOURS}+ hours AND shows clear bearish breakdown
+- Never churn positions — buying and selling the same coin repeatedly destroys returns through fees
 - Do NOT suggest SHORT or MARGIN_BUY — spot trading only
-- Never use capital size as a reason to HOLD
-- A 20-30% portfolio allocation per trade is perfectly acceptable
 {hold_warning}"""
 
-    prompt = f"""You are an expert crypto spot trader. Goal: grow portfolio 20% per month through disciplined BUY and SELL trades.
+    prompt = f"""You are an expert crypto spot trader. Goal: grow portfolio 20% per month through patient, disciplined BUY and SELL trades.
 
 PERFORMANCE:
 - Portfolio: €{portfolio_value:.2f} | Baseline: €{baseline_value:.2f} | Target: €{target_value:.2f}
@@ -428,7 +449,7 @@ PERFORMANCE:
 PORTFOLIO (Available EUR: €{eur_available:.2f}):
 {json.dumps(portfolio_summary, indent=2)}
 
-SELLABLE POSITIONS:
+SELLABLE POSITIONS (shows hours held — minimum {MIN_HOLD_HOURS}h required before selling):
 {chr(10).join(sellable_positions) if sellable_positions else 'None'}
 
 BUYABLE EUR SYMBOLS:
@@ -450,10 +471,10 @@ STRICT RULES:
 - BUY requires EUR balance, SELL requires holding the coin
 - Always use full EUR symbol names (e.g. BTCEUR, ETHEUR)
 - Minimum trade: €{MIN_TRADE_EUR}
-- If BUY but insufficient EUR: add SELL first to generate EUR
+- If BUY but insufficient EUR: add SELL first to generate EUR (only if SELL criteria met)
 - SELL orders before BUY orders in the list
 - Always include confidence (1-10)
-- HOLD only when truly no opportunity exists
+- HOLD when no clear opportunity — patience is profitable
 
 Respond ONLY with JSON array, no explanation:
 [
@@ -495,6 +516,31 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         amount_eur = decision.get("amount_eur")
         if not symbol or not amount_eur:
             continue
+
+        # Check minimum hold time
+        hours_held = get_position_hold_hours(trade_history, symbol)
+        if hours_held < MIN_HOLD_HOURS:
+            print(f"⚠️ SELL {symbol}: held only {hours_held}h — minimum {MIN_HOLD_HOURS}h required, skipping")
+            continue
+
+        # Check minimum loss threshold for manual sells
+        coin = symbol.replace("EUR", "")
+        current_price = market_data.get(symbol, {}).get("current_price", 0)
+        entry_price = 0
+        for trade in reversed(trade_history):
+            if trade.get("symbol") == symbol and trade.get("action") == "BUY" and not trade.get("closed"):
+                entry_price = trade.get("entry_price", 0)
+                break
+        if entry_price > 0 and current_price > 0:
+            loss_pct = (entry_price - current_price) / entry_price
+            gain_pct = (current_price - entry_price) / entry_price
+            if loss_pct > 0 and loss_pct < MIN_LOSS_TO_SELL:
+                print(f"⚠️ SELL {symbol}: loss {loss_pct*100:.2f}% below minimum {MIN_LOSS_TO_SELL*100:.0f}% — let stop-loss handle it, skipping")
+                continue
+            if gain_pct > 0 and gain_pct < TAKE_PROFIT_PERCENT:
+                # Allow selling in profit if Claude is confident
+                pass
+
         max_allowed = portfolio_value * MAX_TRADE_PERCENT
         if amount_eur > max_allowed:
             amount_eur = max_allowed
@@ -502,18 +548,15 @@ def execute_trades(client, decisions, portfolio, portfolio_value, market_data, t
         if amount_eur < MIN_TRADE_EUR:
             print(f"⚠️ SELL {symbol}: below minimum — skipping")
             continue
-        coin = symbol.replace("EUR", "")
-        coin_value = portfolio.get(coin, 0) * market_data.get(symbol, {}).get("current_price", 0)
+        coin_value = portfolio.get(coin, 0) * current_price
         if coin_value < MIN_TRADE_EUR:
             print(f"⚠️ SELL {symbol}: position too small — skipping")
             continue
         try:
             client.order_market_sell(symbol=symbol, quoteOrderQty=round(amount_eur, 2))
-            print(f"✅ SELL {symbol}: €{amount_eur:.2f}")
+            print(f"✅ SELL {symbol}: €{amount_eur:.2f} (held {hours_held}h)")
             for trade in trade_history:
                 if trade.get("symbol") == symbol and trade.get("action") == "BUY" and not trade.get("closed"):
-                    entry_price = trade.get("entry_price", 0)
-                    current_price = market_data.get(symbol, {}).get("current_price", 0)
                     if entry_price > 0:
                         profit_pct = (current_price - entry_price) / entry_price
                         profit_eur = round(trade.get("amount_eur", 0) * profit_pct, 2)
@@ -583,6 +626,7 @@ def main():
     print(f"🛡️ Stop-loss: {STOP_LOSS_PERCENT*100}% | Take-profit: {TAKE_PROFIT_PERCENT*100}%")
     print(f"⏰ Interval: {INTERVAL_SECONDS//60} minutes")
     print(f"🎯 Target: +{TARGET_GROWTH*100:.0f}% per month")
+    print(f"⏳ Min hold time: {MIN_HOLD_HOURS}h | Min loss to sell: {MIN_LOSS_TO_SELL*100:.0f}%")
 
     binance_client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
@@ -627,7 +671,8 @@ def main():
                     symbol = f"{coin}EUR"
                     if symbol in market_data:
                         value = amount * market_data[symbol]["current_price"]
-                        print(f"   {coin}: {amount:.6f} (€{value:.2f})")
+                        hours_held = get_position_hold_hours(trade_history, symbol)
+                        print(f"   {coin}: {amount:.6f} (€{value:.2f}, held {hours_held}h)")
 
             print("📰 Fetching news...")
             news = get_crypto_news()
