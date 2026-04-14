@@ -22,7 +22,7 @@ MAX_TRADE_PERCENT = 0.30
 STOP_LOSS_PERCENT = 0.05
 TAKE_PROFIT_PERCENT = 0.08
 CONFIDENCE_THRESHOLD = 7
-INTERVAL_SECONDS = 3600
+INTERVAL_SECONDS = 14400
 DRAWDOWN_LIMIT = 0.30
 TARGET_GROWTH = 0.20
 MAX_CONSECUTIVE_HOLDS = 6
@@ -418,11 +418,13 @@ STRATEGY: CONSERVATIVE MODE (portfolio lost 30%+ from baseline)
 STRATEGY: AGGRESSIVE MODE — Target 20% monthly growth
 FOCUS: Spot trading only — BUY and SELL EUR pairs
 
-BUY CRITERIA:
-- RSI_1h < 25 (oversold) OR strong momentum (MACD_histogram > 0.3 AND volume_trend > 2.0)
-- Price above MA7
+BUY CRITERIA — ALL must be met, no exceptions:
+- RSI_1h < 25 (strictly oversold — no momentum exceptions)
+- MACD_histogram > 0.05 (bullish momentum confirmation)
+- volume_trend > 1.3 (volume confirmation)
+- Price above MA7 (uptrend structure)
 - Maximum 30% of portfolio per trade
-- Any EUR amount above €{MIN_TRADE_EUR} is sufficient for a valid trade
+- If RSI > 25, return HOLD regardless of other indicators
 
 SELL CRITERIA — ALL of these must be true to sell a position:
 1. Position has been held for at least {MIN_HOLD_HOURS} hours (check hours_held in portfolio)
